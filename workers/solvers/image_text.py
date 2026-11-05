@@ -3,8 +3,6 @@ from typing import Dict, Any
 import base64
 import io
 from app.utils.captcha_solver import BaseSolver
-import cv2
-import numpy as np
 
 
 class ImageTextSolver(BaseSolver):
@@ -18,12 +16,18 @@ class ImageTextSolver(BaseSolver):
         """Initialize OCR model"""
         try:
             import easyocr
+            import cv2
+            import numpy as np
             self.reader = easyocr.Reader(['en'], gpu=False)
+            self.cv2 = cv2
+            self.np = np
             print("✅ EasyOCR initialized")
-        except ImportError:
-            print("⚠️ EasyOCR not installed. Image-to-text solving will not work.")
-            print("   Install with: pip install easyocr opencv-python")
+        except ImportError as e:
+            print(f"⚠️ OCR dependencies not installed: {e}")
+            print("   Install with: pip install easyocr opencv-python numpy")
             self.reader = None
+            self.cv2 = None
+            self.np = None
     
     async def cleanup(self):
         """Cleanup resources"""
@@ -42,7 +46,7 @@ class ImageTextSolver(BaseSolver):
             {"text": "..."}
         """
         if self.reader is None:
-            raise RuntimeError("OCR model not available. Install easyocr and opencv-python.")
+            raise RuntimeError("OCR model not available. Install easyocr, opencv-python, and numpy.")
         
         image_base64 = input_data.get("image")
         
@@ -76,6 +80,9 @@ class ImageTextSolver(BaseSolver):
         4. Apply threshold
         5. Morphological operations
         """
+        cv2 = self.cv2
+        np = self.np
+        
         # Decode image
         nparr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)

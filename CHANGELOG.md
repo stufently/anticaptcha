@@ -18,10 +18,14 @@
 - Учётные файлы: AGENTS.md, CHANGELOG.md, docs/STATE.md, docs/specs/limits.md
 - Dockerfile.minimal для быстрого тестирования
 - requirements-minimal.txt без тяжёлых ML зависимостей
+- Ленивая загрузка ML зависимостей в solvers
+- Тестовые скрипты для реальных CAPTCHA
+- TEST_REPORT.md с результатами тестирования
 
 ### Fixed
 - Исправлена ошибка SQLAlchemy relationships (добавлен ForeignKey)
 - Заменён bcrypt на SHA-256 для хеширования паролей (совместимость с Docker)
+- Ленивый импорт cv2/numpy для работы без ML моделей
 
 ### Security
 - Хеширование API ключей (SHA-256)
@@ -30,6 +34,10 @@
 
 ### Tested
 - ✅ Все API endpoints протестированы и работают
+- ✅ reCAPTCHA demo - challenge обнаруживается
+- ✅ Browser automation работает
+- ✅ Yolo модели загружены
+- ⚠️ Real sites block automation (bot detection)
 
 ## [1.0.0] - 2026-11-05
 

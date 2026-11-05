@@ -42,11 +42,11 @@ class TurnstileSolver(BaseSolver):
         page = await browser_manager.new_page()
         
         try:
-            # Navigate to page
-            await page.goto(page_url, timeout=settings.browser_timeout * 1000)
+            # Navigate to page with extended timeout
+            await page.goto(page_url, timeout=60000, wait_until="domcontentloaded")
             
-            # Wait for Turnstile widget
-            await page.wait_for_selector('iframe[src*="challenges.cloudflare.com"]', timeout=10000)
+            # Wait for Turnstile widget with extended timeout
+            await page.wait_for_selector('iframe[src*="challenges.cloudflare.com"]', timeout=30000)
             
             # Wait for automatic solving (Turnstile often solves automatically)
             await asyncio.sleep(3)
