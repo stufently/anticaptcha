@@ -184,7 +184,7 @@ class RecaptchaV2Solver(BaseSolver):
             img = Image.open(io.BytesIO(image_bytes))
             img_array = np.array(img)
             
-            # COCO classes - use Yolo
+            # COCO classes - use Yolo with higher confidence
             coco_targets = ['car', 'bus', 'truck', 'bicycle', 'motorcycle', 'traffic_light', 'fire_hydrant']
             
             if target in coco_targets and self.yolo_model:
@@ -194,26 +194,43 @@ class RecaptchaV2Solver(BaseSolver):
                 if results and len(results) > 0:
                     boxes = results[0].boxes
                     
+                    # Use higher confidence threshold to reduce false positives
+                    MIN_CONFIDENCE = 0.5  # Raised from 0.3
+                    
                     for box in boxes:
                         class_id = int(box.cls[0])
                         class_name = results[0].names[class_id].lower()
                         confidence = float(box.conf[0])
                         
-                        # Map
-                        if target == 'car' and class_name in ['car', 'truck', 'bus'] and confidence > 0.3:
-                            return True
-                        elif target == 'bus' and class_name == 'bus' and confidence > 0.3:
-                            return True
-                        elif target == 'truck' and class_name == 'truck' and confidence > 0.3:
-                            return True
-                        elif target == 'bicycle' and class_name == 'bicycle' and confidence > 0.3:
-                            return True
-                        elif target == 'motorcycle' and class_name == 'motorcycle' and confidence > 0.3:
-                            return True
-                        elif target == 'traffic_light' and class_name == 'traffic light' and confidence > 0.3:
-                            return True
-                        elif target == 'fire_hydrant' and class_name == 'fire hydrant' and confidence > 0.3:
-                            return True
+                        # Only return True for high-confidence detections
+                        if confidence < MIN_CONFIDENCE:
+                            continue
+                        
+                        # Strict mapping
+                        if target == 'car':
+                            # Only car, not trucks or buses
+                            if class_name == 'car' and confidence > MIN_CONFIDENCE:
+                                return True
+                        elif target == 'bus':
+                            if class_name == 'bus' and confidence > MIN_CONFIDENCE:
+                                return True
+                        elif target == 'truck':
+                            if class_name == 'truck' and confidence > MIN_CONFIDENCE:
+                                return True
+                        elif target == 'bicycle':
+                            if class_name == 'bicycle' and confidence > MIN_CONFIDENCE:
+                                return True
+                        elif target == 'motorcycle':
+                            if class_name == 'motorcycle' and confidence > MIN_CONFIDENCE:
+                                return True
+                        elif target == 'traffic_light':
+                            # Be very strict for traffic lights
+                            if class_name == 'traffic light' and confidence > 0.6:
+                                return True
+                        elif target == 'fire_hydrant':
+                            # Be very strict for fire hydrants
+                            if class_name == 'fire hydrant' and confidence > 0.6:
+                                return True
             
             # Heuristics for non-COCO classes
             elif target == 'crosswalk':
