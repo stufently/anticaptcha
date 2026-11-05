@@ -35,15 +35,14 @@ docker run -d -v $(pwd)/data:/app/data anticaptcha python -m workers.task_worker
 ### Локально
 
 ```bash
-# Установка зависимостей (в Docker!)
-pip install -r requirements.txt
-playwright install chromium
+# Инициализация базы данных
+python init_db.py
 
 # Запуск API
 uvicorn app.main:app --reload
 
 # Запуск worker (в отдельном терминале)
-python -m workers.task_worker
+python run_worker.py
 ```
 
 ## API Documentation

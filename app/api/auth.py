@@ -2,15 +2,22 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models.user import User
-from app.models.api_key import APIKey
+from app.models.api_key import User, APIKey
 from app.schemas.user import UserCreate, UserResponse, APIKeyResponse
-from passlib.context import CryptContext
+import hashlib
 from typing import List
 
 router = APIRouter()
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def hash_password(password: str) -> str:
+    """Hash password with SHA-256"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    """Verify password against hash"""
+    return hash_password(password) == password_hash
 
 
 @router.post("/user", response_model=UserResponse, tags=["auth"])
@@ -23,10 +30,14 @@ def create_user(
     if db.query(User).filter(User.username == user_data.username).first():
         raise HTTPException(status_code=400, detail="Username already exists")
     
+    # Validate password length (bcrypt limit)
+    if len(user_data.password.encode('utf-8')) > 72:
+        raise HTTPException(status_code=400, detail="Password too long (max 72 bytes)")
+    
     # Create user
     user = User(
         username=user_data.username,
-        password_hash=pwd_context.hash(user_data.password)
+        password_hash=hash_password(user_data.password)
     )
     
     db.add(user)

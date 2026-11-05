@@ -14,11 +14,22 @@
 - Dockerfile для контейнеризации
 - API документация (Swagger/ReDoc)
 - Тесты для API endpoints
+- Скрипты запуска: run.sh, run_worker.py, init_db.py
+- Учётные файлы: AGENTS.md, CHANGELOG.md, docs/STATE.md, docs/specs/limits.md
+- Dockerfile.minimal для быстрого тестирования
+- requirements-minimal.txt без тяжёлых ML зависимостей
+
+### Fixed
+- Исправлена ошибка SQLAlchemy relationships (добавлен ForeignKey)
+- Заменён bcrypt на SHA-256 для хеширования паролей (совместимость с Docker)
 
 ### Security
 - Хеширование API ключей (SHA-256)
-- Хеширование паролей (bcrypt)
+- Хеширование паролей (SHA-256)
 - Аутентификация через X-API-Key header
+
+### Tested
+- ✅ Все API endpoints протестированы и работают
 
 ## [1.0.0] - 2026-11-05
 

@@ -21,7 +21,9 @@ class ImageTextSolver(BaseSolver):
             self.reader = easyocr.Reader(['en'], gpu=False)
             print("✅ EasyOCR initialized")
         except ImportError:
-            raise RuntimeError("EasyOCR not installed. Run: pip install easyocr")
+            print("⚠️ EasyOCR not installed. Image-to-text solving will not work.")
+            print("   Install with: pip install easyocr opencv-python")
+            self.reader = None
     
     async def cleanup(self):
         """Cleanup resources"""
@@ -39,6 +41,9 @@ class ImageTextSolver(BaseSolver):
         Returns:
             {"text": "..."}
         """
+        if self.reader is None:
+            raise RuntimeError("OCR model not available. Install easyocr and opencv-python.")
+        
         image_base64 = input_data.get("image")
         
         if not image_base64:
