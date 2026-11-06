@@ -253,6 +253,68 @@ class TestVisionLLMClassifier:
         assert hasattr(classifier, 'cleanup')
 
 
+class TestYOLOClassifier:
+    """Test YOLO classifier"""
+
+    def test_import_yolo(self):
+        """Test importing YOLOClassifier"""
+        try:
+            from workers.classifiers.yolo import YOLOClassifier
+            # Only create if YOLO is installed
+            classifier = YOLOClassifier()
+            assert classifier is not None
+        except ImportError:
+            print("⚠️ YOLO not installed, skipping")
+
+    def test_yolo_methods(self):
+        """Test YOLOClassifier has required methods"""
+        try:
+            from workers.classifiers.yolo import YOLOClassifier
+            classifier = YOLOClassifier()
+
+            assert hasattr(classifier, 'classify_tiles')
+            assert hasattr(classifier, 'detect_objects')
+            assert hasattr(classifier, 'cleanup')
+        except ImportError:
+            print("⚠️ YOLO not installed, skipping")
+
+    def test_target_keywords(self):
+        """Test target keyword mapping"""
+        try:
+            from workers.classifiers.yolo import YOLOClassifier
+            classifier = YOLOClassifier()
+
+            keywords = classifier._get_target_keywords("cars")
+            assert "car" in keywords or "vehicle" in keywords
+        except ImportError:
+            print("⚠️ YOLO not installed, skipping")
+
+
+class TestHybridClassifier:
+    """Test Hybrid classifier"""
+
+    def test_import_hybrid(self):
+        """Test importing HybridClassifier"""
+        from workers.classifiers.yolo import HybridClassifier
+        classifier = HybridClassifier()
+        assert classifier is not None
+
+    def test_hybrid_methods(self):
+        """Test HybridClassifier has required methods"""
+        from workers.classifiers.yolo import HybridClassifier
+        classifier = HybridClassifier()
+
+        assert hasattr(classifier, 'classify_tiles')
+        assert hasattr(classifier, 'cleanup')
+
+    def test_hybrid_strategy(self):
+        """Test hybrid strategy configuration"""
+        from workers.classifiers.yolo import HybridClassifier
+        classifier = HybridClassifier(yolo_threshold=0.7)
+
+        assert classifier.yolo_threshold == 0.7
+
+
 class TestAllSolversRegistration:
     """Test that all solvers are registered"""
 

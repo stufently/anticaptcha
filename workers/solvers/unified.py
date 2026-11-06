@@ -76,6 +76,16 @@ class UnifiedCaptchaSolver:
         from workers.solvers.tencent import TencentCaptchaSolver
         from workers.solvers.simple_captcha import SimpleCaptchaSolver
 
+        # Initialize hybrid classifier (YOLO + Vision LLM)
+        try:
+            from workers.classifiers.yolo import HybridClassifier
+            self.vision_classifier = HybridClassifier()
+            print("✅ Using Hybrid Classifier (YOLO + Vision LLM)")
+        except Exception as e:
+            print(f"⚠️ Hybrid Classifier failed, using Vision LLM only: {e}")
+            from workers.classifiers.vision_llm import VisionLLMClassifier
+            self.vision_classifier = VisionLLMClassifier()
+
         # Initialize solvers with vision classifier
 
         # Google reCAPTCHA
