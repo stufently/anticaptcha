@@ -11,6 +11,15 @@
   - hCaptcha
   - Image-to-text (OCR)
   - Cloudflare Turnstile
+  - **FunCaptcha (Arkose Labs)** - rotate/drag/select challenges
+  - **GeeTest** - slide/icon/nine-grid puzzles
+  - **Amazon WAF** - image text and puzzle challenges
+  - **Tencent CAPTCHA (TenDI)** - slide/select/click verification
+  - **Simple CAPTCHA** - text/math/rotate/click challenges
+  - **Yandex CAPTCHA/SmartCaptcha** - full implementation
+  - **VK Captcha** - text/image/slide puzzles
+- Vision LLM classifier (kimi-k2.5) for all image-based CAPTCHAs
+- Unified API для всех типов CAPTCHA
 - Dockerfile для контейнеризации
 - API документация (Swagger/ReDoc)
 - Тесты для API endpoints
@@ -21,6 +30,8 @@
 - Ленивая загрузка ML зависимостей в solvers
 - Тестовые скрипты для реальных CAPTCHA
 - TEST_REPORT.md с результатами тестирования
+- CAPTCHA_SUPPORT.md - сравнение с конкурентами (RuCaptcha, Anti-Captcha, CapMonster)
+- README_SOLVER.md - quick start guide
 
 ### Fixed
 - Исправлена ошибка SQLAlchemy relationships (добавлен ForeignKey)

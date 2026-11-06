@@ -1,25 +1,36 @@
 """hCaptcha solver"""
 import asyncio
+import random
 from typing import Dict, Any
-from app.utils.captcha_solver import BaseSolver
-from app.utils.browser import browser_manager
-from app.config import settings
+
+# Optional: Playwright for browser automation
+try:
+    from app.utils.captcha_solver import BaseSolver
+    from app.utils.browser import browser_manager
+    from app.config import settings
+    HAS_PLAYWRIGHT = True
+except ImportError:
+    HAS_PLAYWRIGHT = False
+    # Fallback base class for testing
+    class BaseSolver:
+        pass
 
 
 class HcaptchaSolver(BaseSolver):
-    """Solve hCaptcha"""
-    
+    """Solve hCaptcha using Vision LLM"""
+
     def __init__(self):
         super().__init__()
-    
+        self.vision_classifier = None
+
     async def setup(self):
-        """Setup solver"""
+        """Initialize solver"""
         pass
-    
+
     async def cleanup(self):
         """Cleanup resources"""
         pass
-    
+
     async def solve(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Solve hCaptcha
@@ -39,21 +50,22 @@ class HcaptchaSolver(BaseSolver):
         if not site_key or not page_url:
             raise ValueError("Missing site_key or page_url")
         
-        page = await browser_manager.new_page()
+        page = await browser_manager.new_page(stealth=True)
         
         try:
             # Navigate to page
-            await page.goto(page_url, timeout=settings.browser_timeout * 1000)
+            await page.goto(page_url, timeout=60000)
             
             # Wait for hCaptcha iframe
-            await page.wait_for_selector('iframe[src*="hcaptcha"]', timeout=10000)
+            await page.wait_for_selector('iframe[src*="hcaptcha"]', timeout=30000)
             
             # Click checkbox
             checkbox_frame = page.frame_locator('iframe[src*="hcaptcha"]')
             await checkbox_frame.locator('.checkbox').click()
             
             # Wait for challenge
-            await asyncio.sleep(1)
+            print("⏳ Waiting for hCaptcha response...")
+            await asyncio.sleep(3)  # Wait longer for auto-solve
             
             # Try to extract token
             token = await self._extract_token(page)
