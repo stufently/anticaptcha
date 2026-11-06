@@ -3,7 +3,7 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies + Node.js for qw2
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -28,7 +28,12 @@ RUN apt-get update && apt-get install -y \
     libxrandr2 \
     xdg-utils \
     libgl1 \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Qwen Code CLI globally
+RUN npm install -g @qwen-code/qwen-code
 
 # Copy requirements
 COPY requirements.txt .
@@ -36,7 +41,11 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright browsers
+# Install Qwen Code SDK for Vision LLM
+RUN pip install --no-cache-dir qwen-code-sdk
+
+# Install Playwright browsers to a global location
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN playwright install chromium
 
 # Copy application
