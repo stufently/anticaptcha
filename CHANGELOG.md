@@ -37,6 +37,9 @@
 - Исправлена ошибка SQLAlchemy relationships (добавлен ForeignKey)
 - Заменён bcrypt на SHA-256 для хеширования паролей (совместимость с Docker)
 - Ленивый импорт cv2/numpy для работы без ML моделей
+- Исправлен детектор CAPTCHA: async wait_for для iframes, case-insensitive селекторы
+- Исправлено извлечение site_key для reCAPTCHA из страницы
+- Унифицирован интерфейс solve() для разных типов solvers
 
 ### Security
 - Хеширование API ключей (SHA-256)

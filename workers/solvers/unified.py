@@ -176,14 +176,58 @@ class UnifiedCaptchaSolver:
                     "error": f"No solver registered for {captcha_type}"
                 }
 
-            # Solve
-            success = await solver.solve(page, None, **kwargs)
+            # Solve - detect correct interface
+            import inspect
+            sig = inspect.signature(solver.solve)
+            params = list(sig.parameters.keys())
 
-            return {
-                "success": success,
-                "type": captcha_type,
-                "token": None  # TODO: extract token if applicable
-            }
+            if 'input_data' in params:
+                # Old interface: solve(input_data: Dict) -> Dict
+                # Extract site_key if needed
+                input_data = {
+                    "page_url": page.url,
+                    **kwargs
+                }
+
+                # Extract site_key from page for reCAPTCHA
+                if captcha_type in [CAPTCHAType.RECAPTCHA_V2, CAPTCHAType.RECAPTCHA_V3]:
+                    site_key = await page.evaluate('''
+                        () => {
+                            // Check data attributes
+                            const elem = document.querySelector('[data-sitekey]');
+                            if (elem) return elem.getAttribute('data-sitekey');
+
+                            // Check for sitekey in scripts
+                            const scripts = document.querySelectorAll('script');
+                            for (const script of scripts) {
+                                const content = script.textContent;
+                                const match = content.match(/sitekey['":\s]+['"]([^'"]+)['"]/);
+                                if (match) return match[1];
+                            }
+
+                            return null;
+                        }
+                    ''')
+
+                    if site_key:
+                        input_data['site_key'] = site_key
+
+                result = await solver.solve(input_data)
+
+                return {
+                    "success": result.get("token") is not None,
+                    "type": captcha_type,
+                    "token": result.get("token")
+                }
+            else:
+                # New interface: solve(page, challenge_element, **kwargs) -> bool
+                success = await solver.solve(page, None, **kwargs)
+
+                return {
+                    "success": success,
+                    "type": captcha_type,
+                    "token": None  # TODO: extract token if applicable
+                }
 
         except Exception as e:
             print(f"❌ Error solving CAPTCHA: {e}")

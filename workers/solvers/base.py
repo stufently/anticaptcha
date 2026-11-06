@@ -1,48 +1,38 @@
 """Base classes for CAPTCHA solvers"""
 
-from abc import ABC, abstractmethod
+import asyncio
+import random
 from typing import Dict, Any, Optional
 from pathlib import Path
 
 
-class BaseSolver(ABC):
-    """Abstract base class for CAPTCHA solvers"""
+class BaseSolver:
+    """Base class for all CAPTCHA solvers"""
 
     def __init__(self):
         self.vision_classifier = None
-        self.config = {}
 
-    @abstractmethod
+    async def setup(self):
+        """Setup solver (override in subclass)"""
+        pass
+
+    async def cleanup(self):
+        """Cleanup resources (override in subclass)"""
+        pass
+
     async def solve(self, page, challenge_element, **kwargs) -> bool:
         """
-        Solve CAPTCHA challenge
+        Solve CAPTCHA
 
         Args:
-            page: Playwright page object
-            challenge_element: CAPTCHA challenge element
+            page: Playwright page
+            challenge_element: CAPTCHA element
             **kwargs: Additional parameters
 
         Returns:
-            True if solved successfully, False otherwise
+            True if solved successfully
         """
-        pass
-
-    @abstractmethod
-    def detect(self, page) -> bool:
-        """
-        Detect if this CAPTCHA type is present on the page
-
-        Args:
-            page: Playwright page object
-
-        Returns:
-            True if this CAPTCHA type is detected
-        """
-        pass
-
-    def configure(self, config: Dict[str, Any]):
-        """Configure solver with custom settings"""
-        self.config = config
+        raise NotImplementedError("Subclass must implement solve()")
 
     async def take_screenshot(self, element, path: Optional[Path] = None) -> bytes:
         """Take screenshot of CAPTCHA element"""
@@ -96,6 +86,8 @@ class CAPTCHADetector:
         """
         Detect which CAPTCHA type is present
 
+        Uses wait_for to handle async iframe loading.
+
         Args:
             page: Playwright page object
 
@@ -103,65 +95,114 @@ class CAPTCHADetector:
             CAPTCHA type identifier
         """
 
-        # Check for reCAPTCHA v2/v3
-        if await page.locator('.g-recaptcha, iframe[src*="recaptcha"]').count() > 0:
-            # Determine v2 or v3
-            if await page.locator('.g-recaptcha-response').count() > 0:
-                return CAPTCHAType.RECAPTCHA_V2
-            return CAPTCHAType.RECAPTCHA_V3
+        try:
+            # Check for reCAPTCHA v2/v3
+            if await page.locator('.g-recaptcha, iframe[src*="recaptcha"]').count() > 0:
+                # Determine v2 or v3
+                if await page.locator('.g-recaptcha-response').count() > 0:
+                    return CAPTCHAType.RECAPTCHA_V2
+                return CAPTCHAType.RECAPTCHA_V3
 
-        # Check for Yandex CAPTCHA
-        if await page.locator('iframe[src*="captcha.yandex"], .yandex-captcha').count() > 0:
-            return CAPTCHAType.YANDEX_CAPTCHA
+            # Check for Yandex CAPTCHA
+            if await page.locator('iframe[src*="captcha.yandex"], .yandex-captcha').count() > 0:
+                return CAPTCHAType.YANDEX_CAPTCHA
 
-        # Check for Yandex SmartCaptcha
-        if await page.locator('iframe[src*="smartcaptcha"]').count() > 0:
-            return CAPTCHAType.YANDEX_SMART
+            # Check for Yandex SmartCaptcha
+            if await page.locator('iframe[src*="smartcaptcha"]').count() > 0:
+                return CAPTCHAType.YANDEX_SMART
 
-        # Check for hCaptcha
-        if await page.locator('.h-captcha, iframe[src*="hcaptcha"]').count() > 0:
-            return CAPTCHAType.HCAPTCHA
+            # Check for hCaptcha - wait for async iframe load
+            # Try multiple selectors including site-specific
+            hcaptcha_selectors = [
+                '.h-captcha',
+                'iframe[src*="hcaptcha"]',
+                'iframe[src*="newassets.hcaptcha.com"]',
+                '.hcaptcha',
+                'div[data-hcaptcha-widget-id]',
+            ]
 
-        # Check for Cloudflare Turnstile
-        if await page.locator('iframe[src*="turnstile"], .cf-turnstile').count() > 0:
-            return CAPTCHAType.CLOUDFLARE_TURNSTILE
+            for selector in hcaptcha_selectors:
+                try:
+                    # Wait up to 5s for iframe to appear
+                    await page.wait_for_selector(selector, timeout=5000)
+                    return CAPTCHAType.HCAPTCHA
+                except:
+                    pass
 
-        # Check for VK Captcha
-        if await page.locator('img[src*="captcha"], .vk_captcha').count() > 0:
-            if 'vk.com' in page.url or 'vk.ru' in page.url:
-                return CAPTCHAType.VK_CAPTCHA
+            # Check for Cloudflare Turnstile - wait for async load
+            turnstile_selectors = [
+                'iframe[src*="turnstile"]',
+                '.cf-turnstile',
+                'iframe[src*="challenges.cloudflare.com"]',
+                'div[data-sitekey] iframe',  # Turnstile widget structure
+            ]
 
-        # Check for FunCaptcha (Arkose Labs)
-        if await page.locator('iframe[src*="funcaptcha"], .arkose-iframe').count() > 0:
-            return CAPTCHAType.FUN_CAPTCHA
+            for selector in turnstile_selectors:
+                try:
+                    await page.wait_for_selector(selector, timeout=5000)
+                    return CAPTCHAType.CLOUDFLARE_TURNSTILE
+                except:
+                    pass
 
-        # Check for GeeTest
-        if await page.locator('iframe[src*="geetest"], .geetest-panel').count() > 0:
-            return CAPTCHAType.GEETEST
+            # Check for VK Captcha
+            if await page.locator('img[src*="captcha"], .vk_captcha').count() > 0:
+                if 'vk.com' in page.url or 'vk.ru' in page.url:
+                    return CAPTCHAType.VK_CAPTCHA
 
-        # Check for Amazon WAF
-        if await page.locator('div[id*="captchachallenge"], img[src*="captcha"][src*="aws"]').count() > 0:
-            return CAPTCHAType.AMAZON_WAF
-        if 'aws.amazon.com/captcha' in page.url or 'captcha' in page.url.lower():
-            return CAPTCHAType.AMAZON_WAF
+            # Check for FunCaptcha (Arkose Labs)
+            if await page.locator('iframe[src*="funcaptcha"], .arkose-iframe, #fc-iframe-wrap').count() > 0:
+                return CAPTCHAType.FUN_CAPTCHA
 
-        # Check for Tencent
-        if await page.locator('iframe[src*="captcha.qq.com"], #TencentCaptcha').count() > 0:
-            return CAPTCHAType.TENCENT
-        if 'captcha.qq.com' in page.url:
-            return CAPTCHAType.TENCENT
+            # Check for GeeTest
+            if await page.locator('iframe[src*="geetest"], .geetest-panel, .gee-test').count() > 0:
+                return CAPTCHAType.GEETEST
 
-        # Check for simple CAPTCHA
-        if await page.locator('img[src*="captcha"], input[name*="captcha"]').count() > 0:
-            return CAPTCHAType.SIMPLE_CAPTCHA
+            # Check for Amazon WAF - specific only
+            if 'aws.amazon.com/captcha' in page.url:
+                if await page.locator('div[id*="captchachallenge"]').count() > 0:
+                    return CAPTCHAType.AMAZON_WAF
+            if 'amazon' in page.url or 'aws' in page.url:
+                if await page.locator('img[src*="captcha"][src*="aws"]').count() > 0:
+                    return CAPTCHAType.AMAZON_WAF
 
-        return CAPTCHAType.UNKNOWN
+            # Check for Tencent
+            if await page.locator('iframe[src*="captcha.qq.com"], #TencentCaptcha').count() > 0:
+                return CAPTCHAType.TENCENT
+            if 'captcha.qq.com' in page.url:
+                return CAPTCHAType.TENCENT
+
+            # Check for simple CAPTCHA - case-insensitive alt matching
+            # Use CSS :has() for combined checks
+            simple_selectors = [
+                'img[alt*="CAPTCHA" i]',
+                'img[alt*="captcha" i]',
+                'img[alt*="Captcha" i]',
+                '.captcha-image img',
+                '#captcha img',
+                'img[src*="securimage"]',
+            ]
+
+            has_captcha_image = False
+            for selector in simple_selectors:
+                if await page.locator(selector).count() > 0:
+                    has_captcha_image = True
+                    break
+
+            if has_captcha_image:
+                if await page.locator('input[name*="captcha" i], input[placeholder*="captcha" i]').count() > 0:
+                    return CAPTCHAType.SIMPLE_CAPTCHA
+
+            return CAPTCHAType.UNKNOWN
+
+        except Exception as e:
+            print(f"⚠️ Error detecting CAPTCHA: {e}")
+            return CAPTCHAType.UNKNOWN
 
 
 class SolverRegistry:
     """Registry for CAPTCHA solvers"""
 
-    _solvers: Dict[str, BaseSolver] = {}
+    _solvers = {}
 
     @classmethod
     def register(cls, captcha_type: str, solver: BaseSolver):
@@ -174,6 +215,6 @@ class SolverRegistry:
         return cls._solvers.get(captcha_type)
 
     @classmethod
-    def get_all(cls) -> Dict[str, BaseSolver]:
+    def list_all(cls) -> Dict[str, BaseSolver]:
         """Get all registered solvers"""
         return cls._solvers.copy()
