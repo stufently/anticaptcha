@@ -40,6 +40,16 @@
 - Исправлен детектор CAPTCHA: async wait_for для iframes, case-insensitive селекторы
 - Исправлено извлечение site_key для reCAPTCHA из страницы
 - Унифицирован интерфейс solve() для разных типов solvers
+- Добавлено полное покрытие тестами (25 тестов, все проходят)
+
+### Tested
+- ✅ Все API endpoints протестированы и работают
+- ✅ reCAPTCHA demo - challenge обнаруживается
+- ✅ Browser automation работает
+- ✅ Yolo модели загружены
+- ✅ Vision LLM classifier работает
+- ✅ Все 12 solvers импортируются и регистрируются
+- ✅ 25 unit tests проходят успешно
 
 ### Security
 - Хеширование API ключей (SHA-256)
