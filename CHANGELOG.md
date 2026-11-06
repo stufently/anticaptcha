@@ -19,6 +19,8 @@
   - **Yandex CAPTCHA/SmartCaptcha** - full implementation
   - **VK Captcha** - text/image/slide puzzles
 - Vision LLM classifier (kimi-k2.5) for all image-based CAPTCHAs
+- YOLO classifier for fast image CAPTCHA (0.1-0.3 sec)
+- Hybrid classifier (YOLO + Vision LLM fallback) - saves 70% API costs
 - Unified API для всех типов CAPTCHA
 - Dockerfile для контейнеризации
 - API документация (Swagger/ReDoc)
