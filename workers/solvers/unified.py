@@ -75,6 +75,7 @@ class UnifiedCaptchaSolver:
         from workers.solvers.amazon import AmazonWAFSolver
         from workers.solvers.tencent import TencentCaptchaSolver
         from workers.solvers.simple_captcha import SimpleCaptchaSolver
+        from workers.solvers.vk_challenge import VKChallengeSolver
 
         # Initialize hybrid classifier (YOLO + Vision LLM)
         try:
@@ -144,6 +145,10 @@ class UnifiedCaptchaSolver:
         simple_solver = SimpleCaptchaSolver()
         simple_solver.vision_classifier = self.vision_classifier
         SolverRegistry.register(CAPTCHAType.SIMPLE_CAPTCHA, simple_solver)
+
+        # VK Challenge (behavior-based protection)
+        vk_challenge_solver = VKChallengeSolver()
+        SolverRegistry.register(CAPTCHAType.VK_CHALLENGE, vk_challenge_solver)
 
     async def solve(
         self,

@@ -64,6 +64,7 @@ class CAPTCHAType:
 
     # Social networks
     VK_CAPTCHA = "vk_captcha"
+    VK_CHALLENGE = "vk_challenge"  # VK behavior-based protection
 
     # Popular services
     FUN_CAPTCHA = "funcaptcha"  # Arkose Labs
@@ -148,6 +149,11 @@ class CAPTCHADetector:
             if await page.locator('img[src*="captcha"], .vk_captcha').count() > 0:
                 if 'vk.com' in page.url or 'vk.ru' in page.url:
                     return CAPTCHAType.VK_CAPTCHA
+
+            # Check for VK Challenge (behavior-based protection)
+            if 'vk.com' in page.url or 'vk.ru' in page.url:
+                if 'challenge.html' in page.url:
+                    return CAPTCHAType.VK_CHALLENGE
 
             # Check for FunCaptcha (Arkose Labs)
             if await page.locator('iframe[src*="funcaptcha"], .arkose-iframe, #fc-iframe-wrap').count() > 0:
