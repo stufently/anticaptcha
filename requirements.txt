@@ -11,16 +11,15 @@ aiosqlite==0.19.0
 playwright==1.40.0
 
 # ML & OCR
-torch==2.1.1
-torchvision==0.16.1
+torch==2.15.0
+torchvision==0.29.2
 easyocr==1.7.1
-opencv-python==4.8.1.78
-ultralytics==8.0.220
+opencv-python==4.14.0.94
+ultralytics==8.4.118
 
 # Utilities
 pydantic==2.5.0
 pydantic-settings==2.1.0
-python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 httpx==0.25.2
 

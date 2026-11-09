@@ -44,6 +44,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Install Qwen Code SDK for Vision LLM
 RUN pip install --no-cache-dir qwen-code-sdk
 
+# YOLO checkpoints: torch.load(weights_only=True) + allow-list instead of full pickle
+ENV ULTRALYTICS_SAFE_LOAD=1
+
 # Install Playwright browsers to a global location
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN playwright install chromium

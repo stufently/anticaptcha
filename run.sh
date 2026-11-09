@@ -22,7 +22,7 @@ fi
 echo "🚀 Starting API server..."
 docker run -d \
     --name $CONTAINER_NAME \
-    -p 8000:8000 \
+    -p 127.0.0.1:8000:8000 \
     -v $PROJECT_ROOT/data:/app/data \
     $IMAGE_NAME
 
