@@ -354,3 +354,61 @@ def test_B1_concurrent_get_browser_launches_once(monkeypatch):
     assert len(launches) == 1, f"concurrent get_browser must launch once, got {len(launches)}"
     assert first is second, "both callers must receive the same browser"
     assert fake.starts == 1, f"one driver start is enough, got {fake.starts}"
+
+
+class UnreapableProcess(HangingProcess):
+    """A killed child whose pipes stay open (a grandchild holds them)."""
+
+    async def wait(self):
+        self.waited = True
+        await asyncio.Event().wait()
+
+
+def test_D3_cancel_reap_is_bounded(monkeypatch):
+    """`Process.wait()` also waits for the pipes: it must not hang the worker."""
+    from workers.classifiers import vision_llm
+
+    monkeypatch.setattr(vision_llm, "_REAP_TIMEOUT", 0.05)
+    classifier = make_classifier(monkeypatch)
+
+    async def scenario():
+        child = UnreapableProcess()
+        calls = install_fake_exec(monkeypatch, child)
+        runner = asyncio.create_task(classifier.classify_tiles(b"image", "bicycles"))
+        await asyncio.wait_for(child.communicating.wait(), timeout=5)
+        runner.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(runner), timeout=2)
+        return child, calls
+
+    try:
+        child, calls = asyncio.run(scenario())
+    finally:
+        classifier.cleanup()
+
+    assert child.killed and child.waited
+    assert calls[0][1].get("start_new_session") is True, (
+        "qwen must run in its own session so killpg reaches its children"
+    )
+
+
+def test_D3_killpg_reaches_grandchildren(tmp_path):
+    """A real child whose grandchild holds the pipes is reaped promptly."""
+    from workers.classifiers import vision_llm
+
+    async def scenario():
+        process = await asyncio.create_subprocess_exec(
+            "sh", "-c", "sleep 30 & sleep 30",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
+        )
+        await asyncio.sleep(0.2)
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        await vision_llm._reap(process)
+        return process.returncode, loop.time() - started
+
+    returncode, elapsed = asyncio.run(scenario())
+    assert returncode is not None, "the killed child must be reaped"
+    assert elapsed < 2, f"reaping took {elapsed:.2f}s: the grandchild kept the pipes open"

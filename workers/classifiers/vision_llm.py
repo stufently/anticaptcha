@@ -11,6 +11,7 @@ import asyncio
 import base64
 import json
 import os
+import signal
 import tempfile
 import uuid
 from pathlib import Path
@@ -47,6 +48,30 @@ EXCLUDED_TOOLS = [
     "send_message",
     "task_stop",
 ]
+
+
+# Seconds to wait for a killed qwen CLI to be reaped. `Process.wait()` also
+# waits for the stdout/stderr pipes to close, so a grandchild that inherited
+# them could otherwise hang the worker forever after `kill()`.
+_REAP_TIMEOUT = 5.0
+
+
+async def _reap(process) -> None:
+    """Kill the qwen CLI with its whole process group, then reap it, bounded."""
+    pid = getattr(process, "pid", None)
+    if isinstance(pid, int) and pid > 0:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass
+    try:
+        await asyncio.wait_for(process.wait(), timeout=_REAP_TIMEOUT)
+    except asyncio.TimeoutError:
+        print(f"⚠️ qwen process not reaped within {_REAP_TIMEOUT}s", flush=True)
 
 
 class VisionLLMClassifier:
@@ -197,13 +222,14 @@ JSON response:"""
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
 
             # Add Python-level timeout (Claude's finding #1). Both handlers
-            # kill the child and then reap it: `kill()` alone leaves a zombie
-            # (timeout) or a live qwen process holding the image (cancellation,
-            # which the outer `except Exception` never sees).
+            # kill the child's process group and reap it with a bound: `kill()`
+            # alone leaves a zombie (timeout) or a live qwen process holding the
+            # image (cancellation, which the outer `except Exception` never sees).
             try:
                 stdout, stderr = await asyncio.wait_for(
                     process.communicate(),
@@ -211,12 +237,10 @@ JSON response:"""
                 )
             except asyncio.TimeoutError:
                 print(f"❌ qwen process timed out after 90 seconds")
-                process.kill()
-                await process.wait()
+                await _reap(process)
                 raise RuntimeError("Vision LLM classification timed out")
             except asyncio.CancelledError:
-                process.kill()
-                await process.wait()
+                await _reap(process)
                 raise
 
             # Parse JSON output
