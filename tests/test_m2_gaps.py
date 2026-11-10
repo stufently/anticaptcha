@@ -304,7 +304,8 @@ def _stub_free_space(monkeypatch, db_path, free_for_size):
     """Replace shutil.disk_usage with one whose `free` follows the real size."""
 
     def disk_usage(_target):
-        size = os.path.getsize(db_path) if os.path.exists(db_path) else 0
+        size = sum(os.path.getsize(p) for p in (str(db_path), f"{db_path}-wal")
+                   if os.path.exists(p))
         free = free_for_size(size)
         return DiskUsage(total=4 * size + free, used=3 * size, free=free)
 
@@ -585,3 +586,77 @@ def test_L1_an_error_that_is_not_a_lock_is_raised_at_once(tmp_path):
     assert facts["elapsed"] < 5.0, (
         f"it must be raised immediately, not after a busy_timeout: {facts['elapsed']} s"
     )
+
+
+
+def _sized(path, n):
+    with open(path, "wb") as fh:
+        fh.truncate(n)
+
+
+def test_V2_wal_pages_count_towards_the_copy(tmp_path, monkeypatch):
+    """Pages still in -wal are copied by the VACUUM too."""
+    from sqlalchemy import create_engine
+    from workers.cleanup import _has_room_for_vacuum
+
+    db = tmp_path / "wal.db"
+    _sized(db, 4096)
+    _sized(f"{db}-wal", 10 * 1024 * 1024)
+    engine = create_engine(f"sqlite:///{db}")
+    free = {"value": 1024 * 1024}
+    monkeypatch.setattr(shutil, "disk_usage",
+                        lambda _t: DiskUsage(total=10**12, used=0, free=free["value"]))
+    assert _has_room_for_vacuum(engine) is False, "-wal size must count"
+    free["value"] = 2 * (4096 + 10 * 1024 * 1024)
+    assert _has_room_for_vacuum(engine) is True
+
+
+def test_V2_temp_dir_needs_room_too(tmp_path, monkeypatch):
+    """The temporary copy may sit on another filesystem (SQLITE_TMPDIR)."""
+    from sqlalchemy import create_engine
+    from workers.cleanup import _has_room_for_vacuum
+
+    db = tmp_path / "db" / "t.db"
+    db.parent.mkdir()
+    _sized(db, 1024 * 1024)
+    tmp = tmp_path / "sqlite-tmp"
+    tmp.mkdir()
+    monkeypatch.setenv("SQLITE_TMPDIR", str(tmp))
+    engine = create_engine(f"sqlite:///{db}")
+
+    def disk_usage(target):
+        small = os.path.abspath(target) == str(tmp)
+        return DiskUsage(total=10**12, used=0, free=1024 if small else 10**9)
+
+    monkeypatch.setattr(shutil, "disk_usage", disk_usage)
+    assert _has_room_for_vacuum(engine) is False, "temp dir without room must block the VACUUM"
+    monkeypatch.delenv("SQLITE_TMPDIR")
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    assert _has_room_for_vacuum(engine) is True
+
+
+def test_V3_migration_skips_unique_autoindexes(tmp_path):
+    """sqlite_autoindex_* cannot be dropped; the migration must leave them alone."""
+    import sqlalchemy as sa
+    from app.database import _migrate_tasks_autoincrement
+    from app.models.task import Task
+
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'uniq.db'}")
+    md = sa.MetaData()
+    sa.Table("api_keys", md, sa.Column("id", sa.Integer, primary_key=True))
+    legacy = Task.__table__.to_metadata(md)
+    legacy.dialect_options["sqlite"]["autoincrement"] = False
+    legacy.append_column(sa.Column("legacy_ref", sa.String(20), unique=True))
+    md.create_all(engine)
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "insert into tasks (id, api_key_id, type, status, input_data, legacy_ref) "
+            "values (3, 1, 'image_text', 'solved', '{}', 'a')")
+        assert conn.exec_driver_sql(
+            "select count(*) from sqlite_master where name like 'sqlite_autoindex_tasks%'"
+        ).scalar() == 1
+        assert _migrate_tasks_autoincrement(conn) is True
+        ddl = conn.exec_driver_sql("select sql from sqlite_master where name='tasks'").scalar()
+        assert "AUTOINCREMENT" in ddl.upper()
+        assert conn.exec_driver_sql("select id from tasks").scalars().all() == [3]
+    engine.dispose()

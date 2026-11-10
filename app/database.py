@@ -118,7 +118,11 @@ def _migrate_tasks_autoincrement(conn) -> bool:
     # names, and the new table brings the very same ones (ix_tasks_id): they
     # have to go first or CREATE TABLE fails on a duplicate index name.
     stale = conn.exec_driver_sql(
-        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=?", (old,)
+        # sql IS NULL: sqlite_autoindex_* of UNIQUE/PRIMARY KEY constraints,
+        # which cannot be dropped and go away together with the table.
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=? "
+        "AND sql IS NOT NULL",
+        (old,),
     ).fetchall()
     for (name,) in stale:
         conn.exec_driver_sql(f'DROP INDEX "{name}"')

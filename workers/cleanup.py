@@ -119,9 +119,22 @@ def _has_room_for_vacuum(engine) -> bool:
     path = engine.url.database
     if not path or path == ":memory:":
         return True
-    size = os.path.getsize(path) if os.path.exists(path) else 0
-    free = shutil.disk_usage(os.path.dirname(os.path.abspath(path))).free
-    return free >= 2 * size
+    # Pages not yet checkpointed live in the -wal file and are part of the copy.
+    size = sum(os.path.getsize(p) for p in (path, path + "-wal") if os.path.exists(p))
+    if shutil.disk_usage(os.path.dirname(os.path.abspath(path))).free < 2 * size:
+        return False
+    # The temporary copy is built in SQLite's temp directory, which may be
+    # another filesystem than the database.
+    return shutil.disk_usage(_sqlite_temp_dir()).free >= size
+
+
+def _sqlite_temp_dir() -> str:
+    """The directory SQLite (unix VFS) picks for temporary files, in its order."""
+    for candidate in (os.environ.get("SQLITE_TMPDIR"), os.environ.get("TMPDIR"),
+                      "/var/tmp", "/usr/tmp", "/tmp"):
+        if candidate and os.path.isdir(candidate) and os.access(candidate, os.W_OK | os.X_OK):
+            return candidate
+    return "."
 
 
 def reclaim_space(engine) -> None:
