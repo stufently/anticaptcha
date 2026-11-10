@@ -74,10 +74,15 @@
   UTC, the same clock the worker writes into `created_at`.
 - **Order and batching:** deletes first, then input clearing; at most 100 rows
   per statement, every batch with its own commit (no long write transaction).
+  `batch_size` must be `>= 1` — `purge_tasks` raises `ValueError` otherwise,
+  because SQLite reads `LIMIT 0` as "no rows" (the round would report a clean
+  database while trimming nothing) and `LIMIT -1` as "no limit at all" (the whole
+  backlog in the one long transaction the batching avoids).
 - **Space reclaim:** a database still on `auto_vacuum != 2` is migrated once by a
   full `VACUUM`, which needs free space for a copy of the live data (measured:
   4.8 s and a `-wal` grown to 1083 MB for 1 GB of live data on NVMe) — so it runs
-  only after the purge. An already INCREMENTAL database is trimmed with
+  only after the purge, and only when the volume can hold the copy (see "One-time
+  `auto_vacuum` migration" below). An already INCREMENTAL database is trimmed with
   `incremental_vacuum` until the freelist is empty, then
   `wal_checkpoint(TRUNCATE)` shrinks `-wal`; a full `VACUUM` is never repeated.
 - **Schedule:** the worker calls `run_cleanup()` every **600 s**
@@ -108,7 +113,49 @@
   the writer lock the second `create_all` died on `table users already exists`
   (reproduced). Now the loser waits out the lock (`busy_timeout` 5 s) and sees the
   tables the winner committed.
+- **`init_db()` retries the lock:** `busy_timeout` bounds ONE attempt, and a
+  migration in the other process can outlast it - the loser then died on
+  `database is locked` and the API or the worker did not start (reproduced:
+  5.06 s). `init_db(lock_wait_seconds=60.0)` therefore repeats `_init_db_once()`
+  every 0.5 s while the error contains `locked` and the budget is not up; any
+  other `OperationalError` (a damaged file, a read-only volume) is raised at once.
 - The chart sets none of these values — the code defaults above apply.
+
+#### One-time `auto_vacuum` migration: the full `VACUUM`
+A database created before `auto_vacuum=INCREMENTAL` was set on connect is
+migrated once, by `reclaim_space()` in `workers/cleanup.py`. That one-time
+`VACUUM` carries two limits of its own:
+
+- **It holds the write lock for the whole rebuild.** SQLite copies every live
+  page into a temporary database and then replaces the file, so the `VACUUM` is
+  one exclusive operation - `AUTOCOMMIT` on the SQLAlchemy side only means no
+  transaction is wrapped around it. While it runs, another process that wants to
+  write waits `busy_timeout` and then fails: `POST /api/v1/task` takes
+  `BEGIN IMMEDIATE` to count the quota and ends with `database is locked`
+  (measured 5.01 s against a held write lock), i.e. an HTTP 500, and the worker
+  cannot commit either. On a small database this is a fraction of a second;
+  measured on NVMe for 1 GB of live data: 4.8 s. It happens once per database, at
+  the first cleanup round after the upgrade.
+- **It needs free space for a second copy of the database.**
+  `_has_room_for_vacuum()` compares `shutil.disk_usage(<database directory>).free`
+  with `2 * <database file size>` and, when the volume is too small, skips the
+  migration with `⚠️ Not enough free space for the auto_vacuum migration VACUUM;
+  skipped`. Everything else in the round still runs - `wal_checkpoint(TRUNCATE)`
+  included - the database keeps working on `auto_vacuum=0`, and the next cleanup
+  round tries again. Without the check the `VACUUM` would fail halfway through on
+  a full volume and be attempted again every cycle, each time taking the write
+  lock while it copies.
+
+### Settings bounds
+`max_active_tasks_per_key >= 0`, `cleanup_interval_seconds >= 1`,
+`input_retention_hours >= 0` and `task_retention_days >= 0` are enforced by
+pydantic (`Field(..., ge=...)` in `app/config.py`), so an out-of-bounds value -
+from the environment or from `.env` - fails at startup instead of being used.
+A negative quota would silently switch the limit off (`create_task` only checks
+`if limit > 0`), a negative retention would move the purge boundary
+`now - retention` into the future and delete freshly created tasks, and a zero
+`cleanup_interval_seconds` would run the cleanup on every poll. The bounds are
+inclusive: `max_active_tasks_per_key=0` still means "no limit".
 
 ### Client images (`image_text`)
 - **Request body:** 5 MiB (`ANTICAPTCHA_MAX_BODY_BYTES`) — 413 before parsing

@@ -1,4 +1,5 @@
 """Configuration settings for anticaptcha service"""
+from pydantic import Field
 from pydantic_settings import BaseSettings
 from pathlib import Path
 from typing import Optional
@@ -34,15 +35,20 @@ class Settings(BaseSettings):
     max_image_side: int = 4096
 
     # Quota: how many pending/processing tasks one API key may hold at once
-    # (0 = no limit). Read from settings per request, never cached.
-    max_active_tasks_per_key: int = 20
+    # (0 = no limit). Read from settings per request, never cached. Negative is
+    # rejected: the quota only applies `if limit > 0`, so -1 would silently
+    # switch the limit off instead of being read as "zero slots".
+    max_active_tasks_per_key: int = Field(20, ge=0)
 
     # Retention cleanup (workers/cleanup.py). input_data is up to 5 MB of base64
     # per task and the volume is small, so finished tasks lose their input long
-    # before the row itself is deleted.
-    cleanup_interval_seconds: int = 600
-    input_retention_hours: float = 1
-    task_retention_days: float = 7
+    # before the row itself is deleted. Negative retentions are rejected: the
+    # purge boundary `now - retention` would land in the FUTURE and delete tasks
+    # created after it. A zero interval is rejected too: maybe_cleanup compares
+    # `now - last < cleanup_interval_seconds`, so 0 would clean on every poll.
+    cleanup_interval_seconds: int = Field(600, ge=1)
+    input_retention_hours: float = Field(1, ge=0)
+    task_retention_days: float = Field(7, ge=0)
 
     # ML Models
     models_dir: str = "models"

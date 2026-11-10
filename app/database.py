@@ -1,5 +1,7 @@
 """Database connection and session management"""
+import time
 from sqlalchemy import create_engine, event
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from pathlib import Path
@@ -46,8 +48,30 @@ def get_db():
         db.close()
 
 
-def init_db():
-    """Initialize database tables"""
+def init_db(lock_wait_seconds: float = 60.0):
+    """Initialize database tables, waiting out another process' write lock.
+
+    `busy_timeout` (5 s) bounds ONE attempt only. A migration in the other
+    process outlasts it - the `tasks` rebuild copies every row - and the loser
+    then died on "database is locked" without a retry (measured: 5.06 s), so
+    starting the API or the worker failed. Startup must not depend on winning
+    that race, hence the retry until `lock_wait_seconds` is up. Any other
+    OperationalError is raised at once: a damaged file or a read-only volume
+    does not get better by trying again.
+    """
+    deadline = time.monotonic() + lock_wait_seconds
+    while True:
+        try:
+            _init_db_once()
+            return
+        except OperationalError as exc:
+            if "locked" not in str(exc) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.5)
+
+
+def _init_db_once():
+    """One attempt at creating the schema; `init_db` retries it on a lock."""
     import app.models  # noqa: F401  registers every table, stats included
     # The API and the worker both call init_db() at startup, and on a fresh
     # volume they start at the same moment: without one write transaction the

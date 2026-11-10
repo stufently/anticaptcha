@@ -11,6 +11,8 @@ The worker calls `run_cleanup` through `asyncio.to_thread` (see
 event loop, would stop the heartbeat long enough for the liveness probe to kill
 the pod in the middle of it.
 """
+import os
+import shutil
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -40,7 +42,14 @@ def purge_tasks(
     default to the ones in `settings`, read at call time. Every batch touches at
     most `batch_size` rows and commits on its own, so a large backlog is trimmed
     in steps instead of one long write transaction.
+
+    `batch_size` must be at least 1: SQLite reads `LIMIT 0` as "no rows", so a
+    zero batch would report a clean database while trimming nothing, and
+    `LIMIT -1` means "no limit at all", which puts the whole backlog back into
+    the one long transaction the batching exists to avoid.
     """
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
     if now is None:
         now = datetime.utcnow()
     if input_retention_hours is None:
@@ -96,13 +105,34 @@ def purge_tasks(
     return {"inputs_cleared": inputs_cleared, "tasks_deleted": tasks_deleted}
 
 
+def _has_room_for_vacuum(engine) -> bool:
+    """True when the volume can hold a second copy of the database.
+
+    The migration VACUUM rebuilds the file page by page through a temporary
+    database, so it needs roughly one more copy of the live size next to the
+    original. On a small or a full volume it fails halfway through, and because
+    the failure leaves `auto_vacuum` at its old value every following cleanup
+    round would attempt exactly the same VACUUM again - each time holding the
+    write lock while it copies. Skipping the round costs nothing: the database
+    keeps working, the next round retries once space appears.
+    """
+    path = engine.url.database
+    if not path or path == ":memory:":
+        return True
+    size = os.path.getsize(path) if os.path.exists(path) else 0
+    free = shutil.disk_usage(os.path.dirname(os.path.abspath(path))).free
+    return free >= 2 * size
+
+
 def reclaim_space(engine) -> None:
     """Give the pages freed by purge_tasks back to the filesystem.
 
     A database created before auto_vacuum=INCREMENTAL was set on connect is
     migrated once, with a full VACUUM - which is why purging runs first: a
-    VACUUM needs free space for a copy of every live page. An INCREMENTAL
-    database is trimmed with `incremental_vacuum` instead and never VACUUMed.
+    VACUUM needs free space for a copy of every live page. When the volume
+    cannot hold that copy the migration is skipped with a warning instead of
+    failing (see `_has_room_for_vacuum`). An INCREMENTAL database is trimmed
+    with `incremental_vacuum` instead and never VACUUMed.
     """
     # VACUUM refuses to run inside a transaction, hence AUTOCOMMIT.
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
@@ -110,7 +140,9 @@ def reclaim_space(engine) -> None:
         auto_vacuum = pragma.fetchone()[0]
         pragma.close()
 
-        if auto_vacuum != 2:
+        if auto_vacuum != 2 and not _has_room_for_vacuum(engine):
+            print("⚠️ Not enough free space for the auto_vacuum migration VACUUM; skipped", flush=True)
+        elif auto_vacuum != 2:
             conn.exec_driver_sql("PRAGMA auto_vacuum=INCREMENTAL")
             conn.exec_driver_sql("VACUUM")
         else:
