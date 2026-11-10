@@ -1,0 +1,99 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: anticaptcha
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: anticaptcha
+    app.kubernetes.io/part-of: argocd
+  annotations:
+    argocd.argoproj.io/manifest-generate-paths: .
+    notifications.argoproj.io/subscribe.on-sync-succeeded.slack: channel
+spec:
+  project: default
+
+  source:
+    # Repository URL
+    repoURL: https://github.com/your-org/anticaptcha.git
+    targetRevision: main
+    path: chart
+
+    # Helm values
+    helm:
+      releaseName: anticaptcha
+      valueFiles:
+        - values.yaml
+        # - values-prod.yaml  # Uncomment for production
+
+      # Additional parameters
+      parameters:
+        - name: image.tag
+          value: "latest"
+        - name: replicaCount
+          value: "1"
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: anticaptcha
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+      - ApplyOutOfSyncOnly=false
+
+    # Retry policy
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  # Ignore differences
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+    - group: apps
+      kind: StatefulSet
+      jsonPointers:
+        - /spec/replicas
+
+---
+# Production Application (uncomment and customize)
+# apiVersion: argoproj.io/v1alpha1
+# kind: Application
+# metadata:
+#   name: anticaptcha-prod
+#   namespace: argocd
+# spec:
+#   project: production
+#
+#   source:
+#     repoURL: https://github.com/your-org/anticaptcha.git
+#     targetRevision: main
+#     path: chart
+#
+#     helm:
+#       releaseName: anticaptcha-prod
+#       valueFiles:
+#         - values-prod.yaml
+#
+#   destination:
+#     server: https://kubernetes.default.svc
+#     namespace: anticaptcha-prod
+#
+#   syncPolicy:
+#     automated:
+#       prune: true
+#       selfHeal: true
+#     syncOptions:
+#       - CreateNamespace=true

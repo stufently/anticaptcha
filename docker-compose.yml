@@ -1,0 +1,109 @@
+version: '3.8'
+
+services:
+  anticaptcha:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: anticaptcha:latest
+    container_name: anticaptcha
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:///./data/anticaptcha.db
+      - LOG_LEVEL=INFO
+      - WORKERS_COUNT=4
+    volumes:
+      - anticaptcha-data:/app/data
+      - anticaptcha-models:/app/models
+      - ./workers:/app/workers:ro
+      - ./app:/app/app:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - anticaptcha-network
+
+  # Optional: Redis для кэширования
+  redis:
+    image: redis:7-alpine
+    container_name: anticaptcha-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    networks:
+      - anticaptcha-network
+    profiles:
+      - with-redis
+
+  # Optional: PostgreSQL для production
+  postgres:
+    image: postgres:15-alpine
+    container_name: anticaptcha-postgres
+    environment:
+      - POSTGRES_DB=anticaptcha
+      - POSTGRES_USER=anticaptcha
+      - POSTGRES_PASSWORD=anticaptcha_secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - anticaptcha-network
+    profiles:
+      - with-postgres
+
+  # Optional: Nginx reverse proxy
+  nginx:
+    image: nginx:alpine
+    container_name: anticaptcha-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - anticaptcha
+    restart: unless-stopped
+    networks:
+      - anticaptcha-network
+    profiles:
+      - with-nginx
+
+volumes:
+  anticaptcha-data:
+    driver: local
+  anticaptcha-models:
+    driver: local
+  redis-data:
+    driver: local
+  postgres-data:
+    driver: local
+
+networks:
+  anticaptcha-network:
+    driver: bridge
+
+# Profiles для разных конфигураций
+# Запуск только anticaptcha:
+#   docker-compose up -d
+#
+# Запуск с Redis:
+#   docker-compose --profile with-redis up -d
+#
+# Запуск с PostgreSQL:
+#   docker-compose --profile with-postgres up -d
+#
+# Запуск с Nginx:
+#   docker-compose --profile with-nginx up -d
+#
+# Запуск всего:
+#   docker-compose --profile with-redis --profile with-postgres --profile with-nginx up -d
