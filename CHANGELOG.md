@@ -1,5 +1,65 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+- Картинка клиента проверяется по заголовку до декода
+  (`check_image_dimensions` в `workers/solvers/image_text.py`): при
+  `width*height > ANTICAPTCHA_MAX_IMAGE_PIXELS` (4 000 000) или
+  `max(width, height) > ANTICAPTCHA_MAX_IMAGE_SIDE` (4096) задача падает с
+  `Image too large: …`, битый или нечитаемый заголовок — с
+  `Unsupported or corrupt image`. Однотонный PNG 20000×20000 весит ~1,2 МБ
+  (проходит лимит тела 5 МБ), а его декод и предобработка — ~4,1 ГБ: воркер с
+  лимитом 4 GiB убивал OOM-killer.
+- Vision LLM вызывается в песочнице: `--approval-mode plan`,
+  `--max-tool-calls 0`, `--core-tools structured_output` и `--exclude-tools`
+  из 13 имён (в том числе `tool_call`, через который достижимы субагенты,
+  `web_fetch` и планировщик). Картинка уходит в запрос вложением
+  (`@<путь>` + `--include-directories`), а не читается инструментом модели.
+  Содержимое страницы контролирует атакующий, поэтому prompt injection больше
+  не даёт ему инструментов агента. Режимы `auto`/`yolo` и переменная
+  `QWEN_CODE_SUPPRESS_YOLO_WARNING` убраны.
+- В `config/qwen/settings.json` выключены `memory.enableManagedAutoMemory` и
+  `memory.enableManagedAutoDream`: CLI больше не делает второй запрос
+  субагентом памяти с `write_file`/`edit` на враждебном контенте.
+- Временная картинка `captcha_*.png` удаляется в `finally` при любом исходе
+  (успех, падение, таймаут) — раньше файлы копились в `/tmp` воркера.
+- Воркер больше не получает `ANTICAPTCHA_ADMIN_TOKEN`: запись отфильтрована из
+  его env в чарте, добавлен ключ `worker.existingSecret` для отдельного Secret
+  воркера (пусто — как раньше, общий `existingSecret`).
+
+### Added
+- Heartbeat воркера (`workers/heartbeat.py`): `beat()` атомарно пишет метку
+  времени (временный файл рядом + `os.replace`), `is_fresh()` проверяет возраст,
+  `heartbeat_loop()` идёт из event loop воркера и переживает ошибки записи,
+  CLI `python -m workers.heartbeat --check --max-age N [--path P]` — rc 0 свежий,
+  1 иначе. Настройки: `ANTICAPTCHA_WORKER_HEARTBEAT_FILE`
+  (`/tmp/worker-heartbeat`) и `ANTICAPTCHA_WORKER_HEARTBEAT_INTERVAL` (10 с).
+- `startupProbe` и `livenessProbe` воркера в чарте по этому heartbeat:
+  `worker.heartbeatFile`, `worker.livenessProbe.{enabled,maxAgeSeconds,periodSeconds,timeoutSeconds,failureThreshold}`,
+  `worker.startupProbe.{periodSeconds,timeoutSeconds,failureThreshold}`;
+  `enabled: false` убирает обе пробы.
+- `BrowserManager` пересоздаёт мёртвый браузер: закэшированный, но отключённый
+  (`is_connected()` ложен) сбрасывается вместе с контекстом, обработчик события
+  `disconnected` чистит кэш (только для текущего браузера), драйвер
+  переиспользуется, а сбой `chromium.launch` останавливает драйвер, чтобы
+  следующий вызов поднял новый.
+
+### Fixed
+- Воркер на свежем томе создаёт таблицы сам: `init_db()` первым шагом `run()`.
+  Раньше при ещё не стартовавшем API воркер падал с `no such table: tasks`.
+- Сбой `recover_interrupted_tasks()` больше не роняет воркер: пишется
+  `⚠️ Recovery of interrupted tasks failed: <тип>: <текст>` и работа
+  продолжается.
+- Версия берётся из `app.__version__` (`FastAPI(version=…)` и ответ `/`) и
+  совпадает с `appVersion` чарта — 1.0.1; раньше в `app/main.py` было
+  захардкожено 1.0.0.
+- `PIL.Image.open` в процессе воркера подменён обёрткой ultralytics, которая
+  глушит исходную ошибку и бросает `ModuleNotFoundError: No module named
+  'pi_heif'` (и пытается поставить пакет в рантайме). Проверка размеров читает
+  заголовок исходной функцией Pillow, поэтому бомба распознаётся как
+  `Image too large:`, а не как `Unsupported or corrupt image`.
+
 ## [1.0.1] - 2026-11-10
 
 ### Fixed

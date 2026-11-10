@@ -62,6 +62,48 @@ kubectl apply -f argocd-application.yaml
 | `resources.limits.cpu` | Лимит CPU | `2000m` |
 | `resources.limits.memory` | Лимит памяти | `4Gi` |
 
+### Worker
+
+Воркер — отдельный Deployment, и он **не получает** `ANTICAPTCHA_ADMIN_TOKEN`,
+даже если тот задан в общем `env`: воркер открывает браузер на страницах, которые
+контролирует атакующий, поэтому админ-токен (credential только для API) в его
+окружение не попадает.
+
+| Параметр | Описание | По умолчанию |
+|----------|----------|--------------|
+| `worker.existingSecret` | Secret только для воркера; пусто — берётся общий `existingSecret` | `""` |
+| `worker.heartbeatFile` | Файл, который воркер обновляет из своего event loop | `/tmp/worker-heartbeat` |
+| `worker.livenessProbe.enabled` | `false` убирает и livenessProbe, и startupProbe воркера | `true` |
+| `worker.livenessProbe.maxAgeSeconds` | Предельный возраст heartbeat, который считается живым | `300` |
+| `worker.livenessProbe.periodSeconds` | Период livenessProbe | `30` |
+| `worker.livenessProbe.timeoutSeconds` | Таймаут livenessProbe | `10` |
+| `worker.livenessProbe.failureThreshold` | Порог срабатываний livenessProbe | `3` |
+| `worker.startupProbe.periodSeconds` | Период startupProbe | `10` |
+| `worker.startupProbe.timeoutSeconds` | Таймаут startupProbe | `10` |
+| `worker.startupProbe.failureThreshold` | Порог startupProbe (бюджет 60 × 10 с = 600 с на загрузку моделей) | `60` |
+
+Обе пробы выполняют `python -m workers.heartbeat --check --max-age <maxAgeSeconds>`.
+Воркер пишет метку времени в `worker.heartbeatFile` (переменная
+`ANTICAPTCHA_WORKER_HEARTBEAT_FILE`, интервал — `ANTICAPTCHA_WORKER_HEARTBEAT_INTERVAL`,
+по умолчанию 10 с) из своего event loop, поэтому:
+
+- `startupProbe` закрывает загрузку моделей: heartbeat стартует сразу после
+  `setup_solvers()`, `initialDelaySeconds` не нужен;
+- `livenessProbe` ловит зависший event loop и мёртвый Chromium (раньше упавший
+  браузер оставался в кэше, и все URL-задачи падали до рестарта пода);
+- `maxAgeSeconds` взят с запасом над `ANTICAPTCHA_TASK_TIMEOUT` (120 с), чтобы
+  долгое решение задачи не выглядело смертью воркера.
+
+```yaml
+worker:
+  existingSecret: anticaptcha-worker-secrets  # свой Secret, без админ-токена
+  heartbeatFile: /tmp/worker-heartbeat
+  livenessProbe:
+    enabled: true
+    maxAgeSeconds: 300
+    periodSeconds: 30
+```
+
 ### Persistence
 
 ```yaml

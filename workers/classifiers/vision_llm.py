@@ -26,6 +26,29 @@ except ImportError:
     print("⚠️ qwen_code_sdk not installed. Install with: pip install qwen-code-sdk")
 
 
+# The analysed image (and the instruction that comes with it) is content from a
+# page the attacker controls, so it must reach the model as data only. `qwen`
+# registers a handful of tools even in headless mode, and `tool_call` is a door
+# to everything else (agent, web_fetch, cron_*), so the deferred tools are
+# excluded by name too. With --core-tools structured_output plus this list the
+# request carries exactly one tool: the JSON-schema answer.
+EXCLUDED_TOOLS = [
+    "skill",
+    "tool_call",
+    "tool_search",
+    "agent",
+    "get_goal",
+    "update_goal",
+    "report_findings",
+    "enter_worktree",
+    "exit_worktree",
+    "record_artifact",
+    "list_agents",
+    "send_message",
+    "task_stop",
+]
+
+
 class VisionLLMClassifier:
     """Классификатор CAPTCHA с использованием qw2 CLI"""
 
@@ -69,19 +92,23 @@ class VisionLLMClassifier:
         # 1. Сохраняем изображение во временный файл с уникальным именем
         unique_id = str(uuid.uuid4())[:8]
         image_path = self.temp_dir / f"captcha_{unique_id}.png"
-        with open(image_path, "wb") as f:
-            f.write(image_bytes)
+        try:
+            with open(image_path, "wb") as f:
+                f.write(image_bytes)
 
-        # 2. Формируем prompt для qw2
-        prompt = self._build_prompt(instruction, grid_size)
+            # 2. Формируем prompt для qw2
+            prompt = self._build_prompt(instruction, grid_size)
 
-        # 3. Вызываем qw2 для классификации
-        result = await self._call_qwen_cli(image_path, prompt)
+            # 3. Вызываем qw2 для классификации
+            result = await self._call_qwen_cli(image_path, prompt)
 
-        # 4. Парсим результат
-        indices = self._parse_response(result)
-
-        return indices
+            # 4. Парсим результат
+            return self._parse_response(result)
+        finally:
+            # Картинка и инструкция пришли со страницы, которую контролирует
+            # атакующий: не оставлять их на диске ни при успехе, ни при
+            # падении/таймауте (иначе /tmp воркера копится чужим контентом).
+            image_path.unlink(missing_ok=True)
 
     def _build_prompt(self, instruction: str, grid_size: str) -> str:
         """Создает prompt для vision model"""
@@ -112,8 +139,9 @@ JSON response:"""
         """
         Вызывает qw2 CLI для классификации изображения
 
-        Использует qwen CLI с --json-schema для структурированного вывода
-        qwen автоматически читает изображение через read_file tool
+        Использует qwen CLI с --json-schema для структурированного вывода.
+        Картинка уходит в запрос как вложение (@путь + --include-directories),
+        инструментов у модели нет: содержимое страницы считается враждебным.
         """
         try:
             # Создаем JSON schema для структурированного ответа
@@ -137,38 +165,39 @@ JSON response:"""
             with open(schema_file, "w") as f:
                 json.dump(schema, f)
 
-            # Формируем команду для qwen
-            # Используем --yolo для автоматического выполнения
-            # --output-format json для JSON вывода
-            # --json-schema для структурированного ответа
-            # --max-wall-time для ограничения времени выполнения
-            # Используем абсолютный путь к изображению
+            # Команда-песочница (порядок аргументов проверен на CLI 0.27.1 —
+            # по отдельности эти флаги оставляют модели лишние инструменты):
+            # @путь + --include-directories кладут картинку в первый запрос
+            # как вложение, --approval-mode plan и --max-tool-calls 0 запрещают
+            # любое действие, --core-tools structured_output оставляет ровно
+            # один инструмент (ответ по схеме), --exclude-tools снимает
+            # остальные, включая tool_call, через который достижимы agent,
+            # web_fetch и cron_*.
             absolute_image_path = str(image_path.resolve())
 
             cmd = [
                 "qwen",
                 "-m", self.vision_model,  # Use configured vision model
-                f"Analyze the CAPTCHA image at {absolute_image_path}. {prompt}",
+                f"Analyze the CAPTCHA image at @{absolute_image_path}. {prompt}",
+                "--include-directories", str(self.temp_dir),
                 "--json-schema", f"@{schema_file}",
                 "--output-format", "json",
-                "--approval-mode", "auto",  # Safer than yolo - auto-approves safe actions
+                "--approval-mode", "plan",
+                "--max-tool-calls", "0",
+                "--core-tools", "structured_output",
+                "--exclude-tools", *EXCLUDED_TOOLS,
                 "--max-wall-time", "60s"  # Max 60 seconds for vision analysis
             ]
 
             print(f"🔍 Calling qwen with model={self.vision_model}, image: {image_path}")
 
-            # Set environment variable
-            env = {
-                **os.environ,
-                "QWEN_CODE_SUPPRESS_YOLO_WARNING": "1"
-            }
-
-            # Run subprocess with timeout
+            # Run subprocess with timeout. The child inherits our environment:
+            # the YOLO warning suppression is gone together with the modes that
+            # auto-approved actions.
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env
+                stderr=asyncio.subprocess.PIPE
             )
 
             # Add Python-level timeout (Claude's finding #1)

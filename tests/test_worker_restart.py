@@ -44,6 +44,7 @@ def test_run_recovers_before_solvers_and_loop(monkeypatch):
     import asyncio
     calls = []
     w = task_worker.TaskWorker()
+    monkeypatch.setattr(task_worker, "init_db", lambda: calls.append("init_db"))
     monkeypatch.setattr(w, "recover_interrupted_tasks", lambda: calls.append("recover"))
 
     class Stop(Exception):
@@ -58,7 +59,8 @@ def test_run_recovers_before_solvers_and_loop(monkeypatch):
         asyncio.run(w.run())
     except Stop:
         pass
-    assert calls == ["recover", "setup"]
+    # init_db first: recovery queries the tasks table, which may not exist yet
+    assert calls == ["init_db", "recover", "setup"]
 
 
 def test_easyocr_reader_not_quantized(monkeypatch):

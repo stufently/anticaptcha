@@ -27,6 +27,10 @@
       }
     ]
   },
+  "memory": {
+    "enableManagedAutoMemory": false,
+    "enableManagedAutoDream": false
+  },
   "security": {
     "auth": {
       "selectedType": "openai"

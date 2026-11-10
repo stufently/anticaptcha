@@ -1,10 +1,71 @@
 """Image-to-text CAPTCHA solver using OCR"""
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
 import asyncio
 import base64
 import io
+import sys
 from concurrent.futures import ThreadPoolExecutor
+from app.config import settings
 from app.utils.captcha_solver import BaseSolver
+
+
+def _open_header(image_bytes: bytes):
+    """Open an image for a header-only read, bypassing third-party patches.
+
+    `ultralytics` (imported by the YOLO classifiers, so it is always loaded in
+    the worker) replaces `PIL.Image.open` with a HEIF fallback that swallows
+    the original error and raises `ModuleNotFoundError: No module named
+    'pi_heif'` whenever that optional plugin is missing - it even tries to pip
+    install it at runtime. A decompression bomb would then be reported as a
+    merely "unsupported" image, so use the pristine Pillow opener when a patch
+    is detected and keep the patched one otherwise.
+    """
+    from PIL import Image
+
+    opener = Image.open
+    patch_module_name = getattr(opener, "__module__", None)
+    if patch_module_name not in (None, Image.__name__):
+        patch_module = sys.modules.get(patch_module_name)
+        pristine = getattr(patch_module, "_image_open", None)
+        if callable(pristine):
+            opener = pristine
+    return opener(io.BytesIO(image_bytes))
+
+
+def check_image_dimensions(image_bytes: bytes) -> Tuple[int, int]:
+    """Reject oversized client images before a single pixel is decoded.
+
+    Width and height come from the header only (`Image.open` without
+    `load()`): a monochrome 20000x20000 PNG is ~1.2 MB on the wire (it fits
+    the 5 MiB body limit) but ~4 GB once decoded and preprocessed, which the
+    OOM killer takes out of the worker. Limits are read from `settings` at
+    call time so they stay configurable per deployment.
+    """
+    from PIL import Image
+
+    try:
+        with _open_header(image_bytes) as header:
+            width, height = header.size
+    except Image.DecompressionBombError as exc:
+        raise ValueError(f"Image too large: {exc}") from None
+    except Exception as exc:
+        raise ValueError(
+            f"Unsupported or corrupt image: {type(exc).__name__}: {exc}"
+        ) from None
+
+    max_pixels = settings.max_image_pixels
+    max_side = settings.max_image_side
+
+    if width * height > max_pixels:
+        raise ValueError(
+            f"Image too large: {width}x{height} is {width * height} pixels, "
+            f"the limit is {max_pixels}"
+        )
+    if max(width, height) > max_side:
+        raise ValueError(
+            f"Image too large: {width}x{height} exceeds the {max_side} pixel side limit"
+        )
+    return width, height
 
 
 class ImageTextSolver(BaseSolver):
@@ -89,14 +150,17 @@ class ImageTextSolver(BaseSolver):
     def _preprocess_image(self, image_bytes: bytes):
         """
         Preprocess CAPTCHA image for better OCR results
-        
+
         Steps:
-        1. Decode image
-        2. Convert to grayscale
-        3. Remove noise
-        4. Apply threshold
-        5. Morphological operations
+        1. Reject oversized images (header only, before any decode)
+        2. Decode image
+        3. Convert to grayscale
+        4. Remove noise
+        5. Apply threshold
+        6. Morphological operations
         """
+        check_image_dimensions(image_bytes)
+
         cv2 = self.cv2
         np = self.np
         

@@ -2,6 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from app import __version__
 from app.config import settings
 from app.database import init_db
 from app.api import tasks, auth, stats
@@ -24,7 +25,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Anticaptcha Service",
     description="Local CAPTCHA solving service with ML models",
-    version="1.0.0",
+    version=__version__,
     lifespan=lifespan
 )
 
@@ -52,7 +53,7 @@ async def root():
     return {
         "service": "anticaptcha",
         "status": "running",
-        "version": "1.0.0"
+        "version": __version__
     }
 
 

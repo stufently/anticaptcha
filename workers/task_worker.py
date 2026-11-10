@@ -3,7 +3,7 @@ import asyncio
 import json
 from datetime import datetime
 from sqlalchemy.orm import Session
-from app.database import SessionLocal
+from app.database import SessionLocal, init_db
 from app.models.task import Task
 from app.models.stats import Stats
 from app.config import settings
@@ -11,6 +11,7 @@ from typing import Dict, Any
 
 
 # Import solvers
+from workers.heartbeat import heartbeat_loop
 from workers.solvers.recaptcha import RecaptchaV2Solver, RecaptchaV3Solver
 from workers.solvers.hcaptcha import HcaptchaSolver
 from workers.solvers.image_text import ImageTextSolver
@@ -160,37 +161,64 @@ class TaskWorker:
     async def run(self):
         """Main worker loop"""
         print("🚀 Task worker started")
-        self.recover_interrupted_tasks()
-        
+        # On a fresh volume the API may not have created the tables yet, and
+        # the first query would die with "no such table: tasks". Failure here
+        # is fatal on purpose: without tables there is nothing to work on.
+        init_db()
+        try:
+            self.recover_interrupted_tasks()
+        except Exception as exc:
+            # Recovery is best-effort: a locked or damaged database must not
+            # keep the worker from serving new tasks.
+            print(
+                f"⚠️ Recovery of interrupted tasks failed: {type(exc).__name__}: {exc}",
+                flush=True,
+            )
+
         # Setup solvers
         await self.setup_solvers()
-        
+
         self.running = True
-        
-        while self.running:
-            db = SessionLocal()
+
+        # Liveness: touched from this event loop, including while process_task
+        # runs, so only a wedged loop lets the stamp go stale.
+        heartbeat = asyncio.create_task(
+            heartbeat_loop(
+                settings.worker_heartbeat_file,
+                settings.worker_heartbeat_interval,
+            )
+        )
+        try:
+            while self.running:
+                db = SessionLocal()
+                try:
+                    # Get next pending task
+                    task = db.query(Task).filter(
+                        Task.status == "pending"
+                    ).order_by(Task.created_at.asc()).first()
+
+                    if task:
+                        await self.process_task(db, task)
+                    else:
+                        # No tasks, wait
+                        await asyncio.sleep(settings.worker_poll_interval)
+
+                except Exception as e:
+                    print(f"❌ Worker error: {e}")
+                    await asyncio.sleep(1)
+
+                finally:
+                    db.close()
+
+            # Cleanup
+            await self.cleanup_solvers()
+            print("🛑 Task worker stopped")
+        finally:
+            heartbeat.cancel()
             try:
-                # Get next pending task
-                task = db.query(Task).filter(
-                    Task.status == "pending"
-                ).order_by(Task.created_at.asc()).first()
-                
-                if task:
-                    await self.process_task(db, task)
-                else:
-                    # No tasks, wait
-                    await asyncio.sleep(settings.worker_poll_interval)
-            
-            except Exception as e:
-                print(f"❌ Worker error: {e}")
-                await asyncio.sleep(1)
-            
-            finally:
-                db.close()
-        
-        # Cleanup
-        await self.cleanup_solvers()
-        print("🛑 Task worker stopped")
+                await heartbeat
+            except asyncio.CancelledError:
+                pass
     
     def stop(self):
         """Stop the worker"""

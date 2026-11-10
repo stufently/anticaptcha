@@ -1,6 +1,6 @@
 # Limits and Constraints
 
-**Last updated:** 2026-11-05
+**Last updated:** 2026-11-10
 
 ## System Limits
 
@@ -33,6 +33,33 @@
 - **Auth:** `Authorization: Bearer <token>` — client API key for `/api/v1/task*`; admin token (`ANTICAPTCHA_ADMIN_TOKEN`) or an admin user's API key for `/api/v1/user` and `/api/v1/api-key/*`
 - **Registration:** closed — users are created only by an admin (HTTP API or `python -m app.cli create-user`)
 - **Max retries:** 3
+
+### Client images (`image_text`)
+- **Request body:** 5 MiB (`ANTICAPTCHA_MAX_BODY_BYTES`) — 413 before parsing
+- **Max pixels:** 4 000 000 (`ANTICAPTCHA_MAX_IMAGE_PIXELS`)
+- **Max side:** 4096 px (`ANTICAPTCHA_MAX_IMAGE_SIDE`)
+- Checked from the header only (`PIL.Image.open` without `load()`) before
+  `cv2.imdecode`, in `workers/solvers/image_text.py::check_image_dimensions`;
+  equality passes, only a larger value is rejected
+- Over limit → task `failed` with `Image too large: …`; unreadable header →
+  `Unsupported or corrupt image: …`. Nothing is decoded in either case
+- Why: a flat-colour 20000×20000 PNG is ~1.2 MB on the wire (it fits the body
+  limit) but ~4.1 GB to decode and preprocess — enough for the OOM killer to
+  take out a 4 GiB worker
+
+### Worker liveness (heartbeat)
+- **File:** `/tmp/worker-heartbeat` (`ANTICAPTCHA_WORKER_HEARTBEAT_FILE`,
+  `worker.heartbeatFile` in the chart)
+- **Interval:** 10 s (`ANTICAPTCHA_WORKER_HEARTBEAT_INTERVAL`), written from
+  the worker's event loop after `setup_solvers()` and cancelled when `run()`
+  exits; the write is atomic (temp file + `os.replace`)
+- **Probe:** `python -m workers.heartbeat --check --max-age N` → rc 0 fresh,
+  1 stale/missing/non-numeric
+- **Chart:** `startupProbe` 10 s × 60 (600 s budget for model loading) and
+  `livenessProbe` 30 s × 3 with `maxAgeSeconds: 300`, both removed by
+  `worker.livenessProbe.enabled: false`
+- `maxAgeSeconds` must stay above `ANTICAPTCHA_TASK_TIMEOUT` (120 s), otherwise
+  a long solve looks like a dead worker
 
 ### ML Models
 - **Yolo:** yolov8n-cls.pt (6 MB)

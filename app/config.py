@@ -20,8 +20,18 @@ class Settings(BaseSettings):
     workers_count: int = 4
     task_timeout: float = 120  # seconds per solve; on timeout the task fails
 
+    # Liveness: the worker touches this file from its event loop, a probe
+    # checks its age (python -m workers.heartbeat --check --max-age N)
+    worker_heartbeat_file: str = "/tmp/worker-heartbeat"
+    worker_heartbeat_interval: float = 10.0
+
     # Max HTTP request body; larger requests get 413 before the body is read
     max_body_bytes: int = 5 * 1024 * 1024
+
+    # Client image limits, checked from the header before any pixel decode:
+    # a 20000x20000 PNG is ~1.2 MB on the wire but ~4 GB in memory
+    max_image_pixels: int = 4_000_000
+    max_image_side: int = 4096
 
     # ML Models
     models_dir: str = "models"

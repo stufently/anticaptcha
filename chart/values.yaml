@@ -59,6 +59,29 @@ resources:
 # Worker configuration
 worker:
   replicas: 1  # Only 1 replica to avoid task conflicts (SQLite)
+  # Secret for the worker only. Empty means "the shared existingSecret", as
+  # before. Set it to a worker-scoped Secret so ANTICAPTCHA_ADMIN_TOKEN (an
+  # API-only credential) never reaches the pod that runs a browser on
+  # attacker-controlled pages.
+  existingSecret: ""
+  # File the worker touches from its event loop; the probes check its age with
+  # `python -m workers.heartbeat --check --max-age <livenessProbe.maxAgeSeconds>`
+  heartbeatFile: /tmp/worker-heartbeat
+  livenessProbe:
+    # false removes the worker livenessProbe and its startupProbe together
+    enabled: true
+    # Accepted heartbeat age in seconds: well above task_timeout (120 s), so a
+    # long solve does not look like a dead worker
+    maxAgeSeconds: 300
+    periodSeconds: 30
+    timeoutSeconds: 10
+    failureThreshold: 3
+  startupProbe:
+    # Covers model loading: the heartbeat starts right after setup_solvers(),
+    # so initialDelaySeconds is not needed. Budget: 60 x 10 s = 600 s.
+    periodSeconds: 10
+    timeoutSeconds: 10
+    failureThreshold: 60
   resources:
     limits:
       cpu: 2000m
