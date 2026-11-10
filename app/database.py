@@ -53,7 +53,8 @@ def init_db(lock_wait_seconds: float = 60.0):
 
     `busy_timeout` (5 s) bounds ONE attempt only. A migration in the other
     process outlasts it - the `tasks` rebuild copies every row - and the loser
-    then died on "database is locked" without a retry (measured: 5.06 s), so
+    then died on "database is locked" without a retry (measured in the
+    acceptance image: 5.01 s on BEGIN IMMEDIATE against a held write lock), so
     starting the API or the worker failed. Startup must not depend on winning
     that race, hence the retry until `lock_wait_seconds` is up. Any other
     OperationalError is raised at once: a damaged file or a read-only volume
