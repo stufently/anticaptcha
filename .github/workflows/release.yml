@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Get chart version
+        id: chart_version
+        run: |
+          CHART_VERSION=$(grep 'appVersion:' chart/Chart.yaml | awk '{print $2}' | tr -d '"')
+          echo "version=$CHART_VERSION" >> $GITHUB_OUTPUT
+          echo "Chart appVersion: $CHART_VERSION"
+
+      - name: Verify tag matches chart version
+        run: |
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          CHART_VERSION=${{ steps.chart_version.outputs.version }}
+          if [ "$TAG_VERSION" != "$CHART_VERSION" ]; then
+            echo "❌ Tag version ($TAG_VERSION) does not match chart appVersion ($CHART_VERSION)"
+            exit 1
+          fi
+          echo "✅ Tag version matches chart version: $TAG_VERSION"
+
+      - name: Build and test Docker image
+        run: |
+          docker build -t anticaptcha:test .
+          docker run --rm anticaptcha:test python -m pytest tests/ -v
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            org.opencontainers.image.source=https://github.com/stufently/anticaptcha
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

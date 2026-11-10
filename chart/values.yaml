@@ -2,9 +2,10 @@
 replicaCount: 1
 
 image:
-  repository: anticaptcha
+  repository: ghcr.io/stufently/anticaptcha
   pullPolicy: IfNotPresent
-  tag: "latest"
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
 
 imagePullSecrets: []
 nameOverride: ""
@@ -16,7 +17,13 @@ serviceAccount:
   name: ""
 
 podAnnotations: {}
-podSecurityContext: {}
+
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  runAsNonRoot: true
+
 securityContext: {}
 
 service:
@@ -28,20 +35,37 @@ ingress:
   enabled: false
   className: ""
   annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
   hosts:
     - host: anticaptcha.local
       paths:
         - path: /
           pathType: ImplementationSpecific
   tls: []
+  #  - secretName: anticaptcha-tls
+  #    hosts:
+  #      - anticaptcha.local
 
 resources:
+  # API resources
   limits:
-    cpu: 2000m
-    memory: 4Gi
-  requests:
-    cpu: 500m
+    cpu: 1000m
     memory: 1Gi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+# Worker configuration
+worker:
+  replicas: 1  # Only 1 replica to avoid task conflicts (SQLite)
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+    requests:
+      cpu: 500m
+      memory: 1536Mi
 
 autoscaling:
   enabled: false
@@ -52,6 +76,9 @@ autoscaling:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# Existing secret for sensitive data (created externally)
+existingSecret: ""
 
 # Environment variables
 env:
@@ -69,17 +96,12 @@ env:
         name: anticaptcha-secrets
         key: admin-token
         optional: true
-
-# Worker configuration
-worker:
-  replicas: 1  # Only 1 replica to avoid task conflicts (SQLite)
-  resources:
-    limits:
-      cpu: 2000m
-      memory: 4Gi
-    requests:
-      cpu: 500m
-      memory: 1Gi
+  - name: BAILIAN_CODING_PLAN_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: anticaptcha-secrets
+        key: bailian-api-key
+        optional: true
 
 # Persistent storage for data only (models are baked into image)
 persistence:

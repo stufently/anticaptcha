@@ -45,15 +45,16 @@ spec:
               protocol: TCP
           env:
             {{- toYaml .Values.env | nindent 12 }}
-          {{- if .Values.configMap.enabled }}
+          {{- if or .Values.configMap.enabled .Values.existingSecret }}
           envFrom:
+            {{- if .Values.configMap.enabled }}
             - configMapRef:
                 name: {{ include "anticaptcha.fullname" . }}-config
-          {{- end }}
-          {{- if .Values.secrets.enabled }}
-          envFrom:
+            {{- end }}
+            {{- if .Values.existingSecret }}
             - secretRef:
-                name: {{ include "anticaptcha.fullname" . }}-secrets
+                name: {{ .Values.existingSecret }}
+            {{- end }}
           {{- end }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
@@ -126,15 +127,16 @@ spec:
           command: ["python", "-m", "workers.task_worker"]
           env:
             {{- toYaml .Values.env | nindent 12 }}
-          {{- if .Values.configMap.enabled }}
+          {{- if or .Values.configMap.enabled .Values.existingSecret }}
           envFrom:
+            {{- if .Values.configMap.enabled }}
             - configMapRef:
                 name: {{ include "anticaptcha.fullname" . }}-config
-          {{- end }}
-          {{- if .Values.secrets.enabled }}
-          envFrom:
+            {{- end }}
+            {{- if .Values.existingSecret }}
             - secretRef:
-                name: {{ include "anticaptcha.fullname" . }}-secrets
+                name: {{ .Values.existingSecret }}
+            {{- end }}
           {{- end }}
           resources:
             {{- toYaml .Values.worker.resources | default .Values.resources | nindent 12 }}
