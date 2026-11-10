@@ -86,7 +86,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Test image (no network)
-        run: docker run --rm --network none -v "$PWD/tests:/app/tests:ro" anticaptcha:test python -m pytest tests -q -p no:cacheprovider
+        run: docker run --rm --network none -v "$PWD/tests:/app/tests:ro" -v "$PWD/chart:/app/chart:ro" -v "$PWD/config:/app/config:ro" anticaptcha:test python -m pytest tests -q -p no:cacheprovider
 
       - name: Push image (same builder, layers from cache)
         if: env.PUSH == 'true'
