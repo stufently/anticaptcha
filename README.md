@@ -4,10 +4,10 @@
 
 ## Возможности
 
-- **reCAPTCHA v2/v3** — решение Google reCAPTCHA
-- **hCaptcha** — решение hCaptcha
-- **Image-to-text** — классические текстовые CAPTCHA через OCR
-- **Cloudflare Turnstile** — решение Turnstile
+- **Image-to-text** — классические текстовые CAPTCHA через OCR (работает)
+- **reCAPTCHA v2/v3**, **hCaptcha**, **Cloudflare Turnstile** — браузерные солверы
+  на Playwright. ⚠️ В 1.1.0 они не решают даже демо-страницы: API принимает такие
+  задачи, но они завершаются `failed`. Починка — следующая веха.
 
 ## Технологии
 
