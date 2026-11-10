@@ -5,6 +5,7 @@ import json
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.database import Base
 from app.models import api_key as _api_key_model  # noqa: F401  registers api_keys table
@@ -30,7 +31,10 @@ class GoodSolver:
 
 @pytest.fixture
 def db():
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    # StaticPool: one shared in-memory DB, also from other threads
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
     Base.metadata.create_all(bind=engine)
     session = sessionmaker(bind=engine)()
     try:
@@ -128,3 +132,56 @@ def test_hanging_task_times_out_and_next_task_runs(monkeypatch, db):
 def test_default_task_timeout_is_120s():
     from app.config import Settings
     assert Settings().task_timeout == 120
+
+
+class SwallowingSolver:
+    """turnstile pattern: an except around page.evaluate() inside the loop.
+    With a bare `except:` it would swallow CancelledError and never stop."""
+
+    async def setup(self):
+        pass
+
+    async def solve(self, input_data):
+        while True:
+            try:
+                await asyncio.sleep(0.05)  # stands in for page.evaluate()
+            except Exception:
+                pass
+
+
+def test_solver_catching_exception_still_cancelled_on_timeout(monkeypatch, db):
+    import time
+    monkeypatch.setattr(task_worker.settings, "task_timeout", 0.3)
+    w = task_worker.TaskWorker()
+    w.solvers = {"swallow": SwallowingSolver()}
+    import threading
+    task = _task(db, "swallow")
+    # Own thread + join timeout: if cancellation is swallowed the loop never
+    # ends (even an outer wait_for can't stop it), the test must fail, not hang.
+    runner = threading.Thread(
+        target=lambda: asyncio.run(w.process_task(db, task)), daemon=True
+    )
+    start = time.monotonic()
+    runner.start()
+    runner.join(timeout=3)
+    assert not runner.is_alive(), "solve was not cancelled: CancelledError swallowed"
+    assert time.monotonic() - start < 1.3
+    db.refresh(task)
+    assert task.status == "failed"
+    assert task.error_message == "Task timed out after 0.3s"
+
+
+def test_no_bare_except_in_solvers():
+    """Bare `except:` / `except BaseException` swallow asyncio.CancelledError."""
+    import re
+    from pathlib import Path
+    root = Path(task_worker.__file__).resolve().parent.parent
+    pattern = re.compile(r"^\s*except\s*(:|BaseException\b)", re.M)
+    offenders = [
+        f"{p.relative_to(root)}:{s[:m.start()].count(chr(10)) + 1}"
+        for d in ("workers", "app")
+        for p in sorted((root / d).rglob("*.py"))
+        for s in [p.read_text(encoding="utf-8")]
+        for m in pattern.finditer(s)
+    ]
+    assert offenders == []

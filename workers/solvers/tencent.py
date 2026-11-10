@@ -159,7 +159,7 @@ class TencentCaptchaSolver(BaseSolver):
                     try:
                         x_percent = float(result.stdout.strip())
                         print(f"   Gap at {x_percent}%")
-                    except:
+                    except Exception:
                         print("   ⚠️ Could not parse, trying random")
                         x_percent = random.randint(40, 60)
                         
@@ -212,7 +212,7 @@ class TencentCaptchaSolver(BaseSolver):
                     import os
                     try:
                         os.unlink(temp_path)
-                    except:
+                    except Exception:
                         pass
             else:
                 print("⚠️ No vision classifier available")

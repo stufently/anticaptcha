@@ -180,7 +180,7 @@ class VKCaptchaSolver(BaseSolver):
                     import os
                     try:
                         os.unlink(temp_path)
-                    except:
+                    except Exception:
                         pass
             else:
                 print("⚠️ No vision classifier available for text captcha")

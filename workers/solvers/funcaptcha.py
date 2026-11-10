@@ -174,7 +174,7 @@ class FunCaptchaSolver(BaseSolver):
                     try:
                         angle = float(result.stdout.strip())
                         print(f"   Detected angle: {angle}°")
-                    except:
+                    except Exception:
                         print("   ⚠️ Could not parse angle, trying common values")
                         # Try common angles
                         for test_angle in [90, 180, 270]:
@@ -190,7 +190,7 @@ class FunCaptchaSolver(BaseSolver):
                     import os
                     try:
                         os.unlink(temp_path)
-                    except:
+                    except Exception:
                         pass
             else:
                 print("⚠️ No vision classifier available")

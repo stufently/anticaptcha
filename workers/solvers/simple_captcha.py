@@ -184,7 +184,7 @@ class SimpleCaptchaSolver(BaseSolver):
                     import os
                     try:
                         os.unlink(temp_path)
-                    except:
+                    except Exception:
                         pass
             else:
                 print("⚠️ No vision classifier available")
@@ -270,7 +270,7 @@ class SimpleCaptchaSolver(BaseSolver):
                     import os
                     try:
                         os.unlink(temp_path)
-                    except:
+                    except Exception:
                         pass
             else:
                 print("⚠️ No vision classifier available")
@@ -324,7 +324,7 @@ class SimpleCaptchaSolver(BaseSolver):
                     try:
                         angle = float(result.stdout.strip())
                         print(f"   Rotation angle: {angle}°")
-                    except:
+                    except Exception:
                         print("   ⚠️ Could not parse angle")
                         angle = 90
                         
@@ -362,7 +362,7 @@ class SimpleCaptchaSolver(BaseSolver):
                     import os
                     try:
                         os.unlink(temp_path)
-                    except:
+                    except Exception:
                         pass
             else:
                 print("⚠️ No vision classifier available")
@@ -461,7 +461,7 @@ class SimpleCaptchaSolver(BaseSolver):
                     import os
                     try:
                         os.unlink(temp_path)
-                    except:
+                    except Exception:
                         pass
             else:
                 print("⚠️ No vision classifier available")

@@ -51,7 +51,7 @@ class VKChallengeSolver(BaseSolver):
             title = await page.title()
             if 'Проверяем, что вы не робот' in title or 'Checking that you are not a robot' in title:
                 return True
-        except:
+        except Exception:
             pass
 
         # Check for challenge button

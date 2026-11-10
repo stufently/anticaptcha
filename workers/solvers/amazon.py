@@ -175,7 +175,7 @@ class AmazonWAFSolver(BaseSolver):
                     import os
                     try:
                         os.unlink(temp_path)
-                    except:
+                    except Exception:
                         pass
             else:
                 print("⚠️ No vision classifier available")
@@ -231,7 +231,7 @@ class AmazonWAFSolver(BaseSolver):
                     try:
                         x_percent = float(result.stdout.strip())
                         print(f"   Position: {x_percent}%")
-                    except:
+                    except Exception:
                         print("   ⚠️ Could not parse position")
                         x_percent = 50
                         
@@ -302,7 +302,7 @@ class AmazonWAFSolver(BaseSolver):
                     import os
                     try:
                         os.unlink(temp_path)
-                    except:
+                    except Exception:
                         pass
             else:
                 print("⚠️ No vision classifier available")

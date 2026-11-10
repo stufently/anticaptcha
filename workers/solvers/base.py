@@ -127,7 +127,7 @@ class CAPTCHADetector:
                     # Wait up to 5s for iframe to appear
                     await page.wait_for_selector(selector, timeout=5000)
                     return CAPTCHAType.HCAPTCHA
-                except:
+                except Exception:
                     pass
 
             # Check for Cloudflare Turnstile - wait for async load
@@ -142,7 +142,7 @@ class CAPTCHADetector:
                 try:
                     await page.wait_for_selector(selector, timeout=5000)
                     return CAPTCHAType.CLOUDFLARE_TURNSTILE
-                except:
+                except Exception:
                     pass
 
             # Check for VK Captcha
