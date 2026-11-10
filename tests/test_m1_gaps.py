@@ -221,6 +221,14 @@ def test_D1_rejects_nonfinite_and_far_future(tmp_path):
         fresh = heartbeat.is_fresh(str(path), max_age=30, now=100)
         assert fresh is expected, f"stamp {stamp!r} at now=100, max_age=30: got {fresh}"
 
+    # An unbounded tolerance (`--max-age inf`) must not resurrect a garbage stamp:
+    # the rejection is about the stamp being unusable, not about its age.
+    for stamp, expected in ((math.inf, False), (-math.inf, False), (math.nan, False), (100, True)):
+        path = tmp_path / "heartbeat"
+        path.write_text(repr(float(stamp)), encoding="ascii")
+        fresh = heartbeat.is_fresh(str(path), max_age=math.inf, now=100)
+        assert fresh is expected, f"stamp {stamp!r} at now=100, max_age=inf: got {fresh}"
+
 
 def test_D2_cancel_kills_and_waits_child(monkeypatch):
     classifier = make_classifier(monkeypatch)
