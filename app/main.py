@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from app.config import settings
 from app.database import init_db
 from app.api import tasks, auth, stats
+from app.body_limit import BodySizeLimitMiddleware
 
 
 @asynccontextmanager
@@ -35,6 +36,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Outermost: reject oversized bodies before anything parses them (auth included)
+app.add_middleware(BodySizeLimitMiddleware)
 
 # Include routers
 app.include_router(tasks.router, prefix=settings.api_prefix)

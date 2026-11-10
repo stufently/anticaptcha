@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     worker_poll_interval: int = 1  # seconds
     max_retries: int = 3
     workers_count: int = 4
+    task_timeout: float = 120  # seconds per solve; on timeout the task fails
+
+    # Max HTTP request body; larger requests get 413 before the body is read
+    max_body_bytes: int = 5 * 1024 * 1024
 
     # ML Models
     models_dir: str = "models"

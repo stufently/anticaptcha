@@ -36,11 +36,27 @@ class TaskWorker:
     
     async def setup_solvers(self):
         """Initialize all solvers"""
+        failed = []
         for task_type, solver_class in SOLVERS.items():
-            solver = solver_class()
-            await solver.setup()
+            try:
+                solver = solver_class()
+                await solver.setup()
+            except Exception as e:
+                # One broken solver must not take the whole worker down: skip it,
+                # its tasks fail with "No solver for task type".
+                failed.append(task_type)
+                print(
+                    f"❌ Solver {task_type} failed to initialize, not registered: "
+                    f"{type(e).__name__}: {e}",
+                    flush=True,
+                )
+                continue
             self.solvers[task_type] = solver
             print(f"✅ Initialized solver: {task_type}")
+        print(
+            f"Solvers ready: {sorted(self.solvers)}; failed: {sorted(failed)}",
+            flush=True,
+        )
     
     async def cleanup_solvers(self):
         """Cleanup all solvers"""
@@ -65,16 +81,23 @@ class TaskWorker:
             
             # Solve CAPTCHA
             input_data = json.loads(task.input_data)
-            result = await solver.solve(input_data)
+            try:
+                # Bound every solve: a hung page (e.g. a Promise that never
+                # resolves) must not block the single worker forever. Cancelling
+                # runs the solver's finally blocks, which close its page.
+                result = await asyncio.wait_for(
+                    solver.solve(input_data), timeout=settings.task_timeout
+                )
+            except asyncio.TimeoutError:
+                raise TimeoutError(
+                    f"Task timed out after {settings.task_timeout}s"
+                ) from None
             
             # Update task
             task.status = "solved"
             task.result = json.dumps(result)
             task.solved_at = datetime.utcnow()
             db.commit()
-            
-            # Update stats
-            self._update_stats(db, task)
             
             print(f"✅ Task {task.id} solved: {result}")
             
@@ -86,13 +109,24 @@ class TaskWorker:
             db.commit()
             
             print(f"❌ Task {task.id} failed: {e}")
+            return
+
+        # Stats are best-effort: a stats error must not turn a solved task into failed
+        try:
+            self._update_stats(db, task)
+        except Exception as e:
+            db.rollback()
+            print(f"⚠️ Stats update failed for task {task.id}: {type(e).__name__}: {e}")
     
     def _update_stats(self, db: Session, task: Task):
         """Update global statistics"""
         stats = db.query(Stats).first()
         
         if not stats:
-            stats = Stats()
+            # Column defaults apply only on INSERT; set explicitly so += works
+            stats = Stats(
+                total_tasks=0, solved_tasks=0, failed_tasks=0, total_solve_time_seconds=0
+            )
             db.add(stats)
         
         stats.total_tasks += 1
