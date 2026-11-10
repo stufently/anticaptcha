@@ -86,6 +86,16 @@
   `VACUUM` on the event loop would stop the heartbeat and the liveness probe
   would kill the pod in the middle of it. A failed round is logged, not raised,
   and still starts the next interval.
+- **Known limitation — task_id reuse:** `tasks.id` is an SQLite `INTEGER PRIMARY
+  KEY` without AUTOINCREMENT (no `sqlite_sequence` table), so rowids are handed
+  out again. If a purge deletes the row with the highest id — in practice when no
+  new task was created for a whole `task_retention_days` — the next created task
+  takes that id back, and a client that kept the old id reads its own NEW task
+  instead of a 404 (measured). It cannot read another key's task: `get_task`
+  filters on `api_key_id` as well. Under normal traffic the newest row survives,
+  ids stay monotonic and nothing is reused. Removing the limitation needs
+  `autoincrement=True` on `Task.id` plus a migration for existing databases,
+  which the project has no mechanism for yet.
 - The chart sets none of these values — the code defaults above apply.
 
 ### Client images (`image_text`)
