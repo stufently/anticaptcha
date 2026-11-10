@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
 
+    # Vision LLM
+    vision_model: str = "kimi-k2.5"
+    bailian_api_key: Optional[str] = None  # BAILIAN_CODING_PLAN_API_KEY
+
     class Config:
         env_file = ".env"
         env_prefix = "ANTICAPTCHA_"

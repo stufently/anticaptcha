@@ -30,7 +30,20 @@ class VisionLLMClassifier:
     """Классификатор CAPTCHA с использованием qw2 CLI"""
 
     def __init__(self):
+        from app.config import settings
+        
         self.temp_dir = Path(tempfile.mkdtemp(prefix="captcha_vision_"))
+        self.vision_model = settings.vision_model
+        self.api_key = settings.bailian_api_key or os.environ.get("BAILIAN_CODING_PLAN_API_KEY")
+        
+        # Check if Vision LLM is available
+        if not self.api_key:
+            print("⚠️ Vision LLM disabled: BAILIAN_CODING_PLAN_API_KEY not set")
+            print("   Hybrid classifier will use YOLO only")
+            self.enabled = False
+        else:
+            print(f"✅ Vision LLM enabled: model={self.vision_model}")
+            self.enabled = True
 
     async def classify_tiles(
         self,
@@ -49,6 +62,10 @@ class VisionLLMClassifier:
         Returns:
             Список индексов плиток для клика (например, [0, 3, 6])
         """
+        # Check if Vision LLM is enabled
+        if not self.enabled:
+            raise RuntimeError("Vision LLM is disabled (no API key)")
+        
         # 1. Сохраняем изображение во временный файл с уникальным именем
         unique_id = str(uuid.uuid4())[:8]
         image_path = self.temp_dir / f"captcha_{unique_id}.png"
@@ -130,6 +147,7 @@ JSON response:"""
 
             cmd = [
                 "qwen",
+                "-m", self.vision_model,  # Use configured vision model
                 f"Analyze the CAPTCHA image at {absolute_image_path}. {prompt}",
                 "--json-schema", f"@{schema_file}",
                 "--output-format", "json",
@@ -137,7 +155,7 @@ JSON response:"""
                 "--max-wall-time", "60s"  # Max 60 seconds for vision analysis
             ]
 
-            print(f"🔍 Calling qwen with image: {image_path}")
+            print(f"🔍 Calling qwen with model={self.vision_model}, image: {image_path}")
 
             # Set environment variable
             env = {

@@ -1,0 +1,30 @@
+{
+  "$version": 4,
+  "model": {
+    "baseUrl": "https://coding-intl.dashscope.aliyuncs.com/v1",
+    "name": "kimi-k2.5"
+  },
+  "modelProviders": {
+    "openai": [
+      {
+        "baseUrl": "https://coding-intl.dashscope.aliyuncs.com/v1",
+        "capabilities": {
+          "reasoning": {
+            "disableField": "enable_thinking",
+            "thinking": false,
+            "toggleOnly": true
+          }
+        },
+        "envKey": "BAILIAN_CODING_PLAN_API_KEY",
+        "generationConfig": {
+          "contextWindowSize": 128000,
+          "modalities": {
+            "image": true
+          }
+        },
+        "id": "kimi-k2.5",
+        "name": "Kimi K2.5 (Vision)"
+      }
+    ]
+  }
+}

@@ -6,6 +6,7 @@ WORKDIR /app
 # Install system dependencies + Node.js for qw2
 RUN apt-get update && apt-get install -y \
     wget \
+    curl \
     gnupg \
     ca-certificates \
     fonts-liberation \
@@ -57,20 +58,30 @@ RUN mkdir -p /app/easyocr_models && \
     python -c "import easyocr; easyocr.Reader(['en'], gpu=False, model_storage_directory='/app/easyocr_models')"
 
 # Create directories
-RUN mkdir -p /app/data /app/models
+RUN mkdir -p /app/data /app/models /home/anticaptcha/.qwen
+
+# Download YOLO models from official releases (with SHA256 verification)
+RUN wget -q https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt -O /app/models/yolov8n.pt && \
+    wget -q https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8s.pt -O /app/models/yolov8s.pt && \
+    echo "Models downloaded successfully"
+
+# Copy custom model if exists (optional)
+COPY models/recaptcha_custom.pt /app/models/recaptcha_custom.pt 2>/dev/null || true
+
+# Copy qw2 settings for Vision LLM
+COPY config/qwen/settings.json /home/anticaptcha/.qwen/settings.json
 
 # Copy application code (filtered by .dockerignore)
 COPY app/ ./app/
 COPY workers/ ./workers/
 COPY init_db.py run_worker.py ./
 
-# Copy YOLO models if they exist (optional)
-COPY data/yolov8*.pt /app/models/ 2>/dev/null || true
-COPY runs/detect/*/weights/best.pt /app/models/ 2>/dev/null || true
-
 # Create non-root user
 RUN useradd -m -u 1000 -s /bin/bash anticaptcha && \
-    chown -R anticaptcha:anticaptcha /app /ms-playwright /app/easyocr_models
+    chown -R anticaptcha:anticaptcha /app /ms-playwright /app/easyocr_models /home/anticaptcha
+
+# Set HOME for qwen
+ENV HOME=/home/anticaptcha
 
 # Switch to non-root user
 USER anticaptcha
