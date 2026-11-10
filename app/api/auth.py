@@ -138,9 +138,13 @@ def create_api_key(
 @router.get("/api-keys/{user_id}", response_model=List[APIKeyResponse], tags=["auth"])
 def list_api_keys(
     user_id: int,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """List all API keys for user (without raw keys)"""
+    """List all API keys for user (without raw keys); self or admin only"""
+    if current_user.id != user_id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Can only list your own API keys")
+
     api_keys = db.query(APIKey).filter(APIKey.user_id == user_id).all()
     
     return [

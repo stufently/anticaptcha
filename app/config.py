@@ -12,7 +12,6 @@ class Settings(BaseSettings):
 
     # API
     api_prefix: str = "/api/v1"
-    api_key_header: str = "X-API-Key"
     admin_token: Optional[str] = None  # Admin token for bootstrap
 
     # Worker

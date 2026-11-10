@@ -7,12 +7,13 @@ from app.models.api_key import APIKey, User
 from app.schemas.task import TaskCreate, TaskResponse, TaskResult, TaskStatus
 from app.config import settings
 import json
+from typing import Optional
 
 router = APIRouter()
 
 
 def get_api_key_and_user(
-    authorization: str = Header(..., alias="Authorization"),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
     db: Session = Depends(get_db)
 ) -> tuple[APIKey, User]:
     """Validate API key from Authorization header and return both API key and user"""
@@ -71,10 +72,11 @@ def create_task(
 @router.get("/task/{task_id}", response_model=TaskResult, tags=["tasks"])
 def get_task(
     task_id: int,
-    api_key: APIKey = Depends(get_api_key),
+    auth_data: tuple[APIKey, User] = Depends(get_api_key_and_user),
     db: Session = Depends(get_db)
 ):
-    """Get task result by ID"""
+    """Get task result by ID (only tasks created with the caller's API key)"""
+    api_key, _ = auth_data
     task = db.query(Task).filter(
         Task.id == task_id,
         Task.api_key_id == api_key.id
