@@ -63,6 +63,7 @@ worker:
   # before. Set it to a worker-scoped Secret so ANTICAPTCHA_ADMIN_TOKEN (an
   # API-only credential) never reaches the pod that runs a browser on
   # attacker-controlled pages.
+  # Empty also lets the shared Secret arrive whole via envFrom, which the env-list token filter does not cover.
   existingSecret: ""
   # File the worker touches from its event loop; the probes check its age with
   # `python -m workers.heartbeat --check --max-age <livenessProbe.maxAgeSeconds>`

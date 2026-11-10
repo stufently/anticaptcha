@@ -200,7 +200,10 @@ JSON response:"""
                 stderr=asyncio.subprocess.PIPE
             )
 
-            # Add Python-level timeout (Claude's finding #1)
+            # Add Python-level timeout (Claude's finding #1). Both handlers
+            # kill the child and then reap it: `kill()` alone leaves a zombie
+            # (timeout) or a live qwen process holding the image (cancellation,
+            # which the outer `except Exception` never sees).
             try:
                 stdout, stderr = await asyncio.wait_for(
                     process.communicate(),
@@ -209,7 +212,12 @@ JSON response:"""
             except asyncio.TimeoutError:
                 print(f"❌ qwen process timed out after 90 seconds")
                 process.kill()
+                await process.wait()
                 raise RuntimeError("Vision LLM classification timed out")
+            except asyncio.CancelledError:
+                process.kill()
+                await process.wait()
+                raise
 
             # Parse JSON output
             output = stdout.decode().strip()

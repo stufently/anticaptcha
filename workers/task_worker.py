@@ -37,6 +37,7 @@ class TaskWorker:
     def __init__(self):
         self.running = False
         self.solvers: Dict[str, Any] = {}
+        self._recovery_pending = True
     
     async def setup_solvers(self):
         """Initialize all solvers"""
@@ -158,6 +159,18 @@ class TaskWorker:
         finally:
             db.close()
 
+    def _try_recover(self) -> None:
+        """Requeue interrupted tasks; on failure keep the flag set to retry later."""
+        try:
+            self.recover_interrupted_tasks()
+        except Exception as exc:
+            print(
+                f"⚠️ Recovery of interrupted tasks failed: {type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            return
+        self._recovery_pending = False
+
     async def run(self):
         """Main worker loop"""
         print("🚀 Task worker started")
@@ -165,15 +178,11 @@ class TaskWorker:
         # the first query would die with "no such table: tasks". Failure here
         # is fatal on purpose: without tables there is nothing to work on.
         init_db()
-        try:
-            self.recover_interrupted_tasks()
-        except Exception as exc:
-            # Recovery is best-effort: a locked or damaged database must not
-            # keep the worker from serving new tasks.
-            print(
-                f"⚠️ Recovery of interrupted tasks failed: {type(exc).__name__}: {exc}",
-                flush=True,
-            )
+        # Recovery is best-effort: a locked or damaged database must not keep
+        # the worker from serving new tasks. The flag stays set on failure and
+        # the loop below retries, so tasks left in `processing` are not stranded
+        # until the next restart.
+        self._try_recover()
 
         # Setup solvers
         await self.setup_solvers()
@@ -190,6 +199,12 @@ class TaskWorker:
         )
         try:
             while self.running:
+                # Retry a recovery that failed at startup until it succeeds:
+                # without this, tasks left in `processing` by a dead worker stay
+                # stuck until the next restart.
+                if self._recovery_pending:
+                    self._try_recover()
+
                 db = SessionLocal()
                 try:
                     # Get next pending task

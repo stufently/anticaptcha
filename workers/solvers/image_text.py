@@ -8,6 +8,13 @@ from concurrent.futures import ThreadPoolExecutor
 from app.config import settings
 from app.utils.captcha_solver import BaseSolver
 
+# Formats Pillow and OpenCV agree on. A header-only size check is only sound
+# when both readers parse the same dimensions: a JPEG 2000 file with two `ihdr`
+# boxes is read by Pillow from the last one (32x32) and by OpenJPEG inside
+# `cv2.imdecode` from the first one (2500x2000), so a 505-byte upload passes
+# the limits and then explodes on decode. TIFF has the same IFD ambiguity.
+ALLOWED_IMAGE_FORMATS = frozenset({"PNG", "JPEG", "WEBP", "BMP"})
+
 
 def _open_header(image_bytes: bytes):
     """Open an image for a header-only read, bypassing third-party patches.
@@ -40,18 +47,25 @@ def check_image_dimensions(image_bytes: bytes) -> Tuple[int, int]:
     the 5 MiB body limit) but ~4 GB once decoded and preprocessed, which the
     OOM killer takes out of the worker. Limits are read from `settings` at
     call time so they stay configurable per deployment.
+
+    The header is only trustworthy for formats both readers parse identically
+    (`ALLOWED_IMAGE_FORMATS`); anything else is rejected instead of measured.
     """
     from PIL import Image
 
     try:
         with _open_header(image_bytes) as header:
             width, height = header.size
+            fmt = header.format
     except Image.DecompressionBombError as exc:
         raise ValueError(f"Image too large: {exc}") from None
     except Exception as exc:
         raise ValueError(
             f"Unsupported or corrupt image: {type(exc).__name__}: {exc}"
         ) from None
+
+    if fmt not in ALLOWED_IMAGE_FORMATS:
+        raise ValueError(f"Unsupported image format: {fmt}")
 
     max_pixels = settings.max_image_pixels
     max_side = settings.max_image_side

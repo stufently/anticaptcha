@@ -1,4 +1,6 @@
 """Playwright browser wrapper with stealth capabilities"""
+import asyncio
+
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 from app.config import settings
 from typing import Optional
@@ -18,61 +20,63 @@ class BrowserManager:
         self._browser: Optional[Browser] = None
         self._context: Optional[BrowserContext] = None
         self._stealth = Stealth() if HAS_STEALTH else None
-    
+        self._lock = asyncio.Lock()
+
     async def get_browser(self) -> Browser:
         """Get or create browser instance"""
-        if self._browser is not None and not self._browser.is_connected():
-            # A crashed Chromium used to stay in the cache forever: every URL
-            # task then failed until the pod was restarted. Drop it (and the
-            # context that belonged to it) and launch a fresh one.
-            self._browser = None
-            self._context = None
+        async with self._lock:
+            if self._browser is not None and not self._browser.is_connected():
+                # A crashed Chromium used to stay in the cache forever: every URL
+                # task then failed until the pod was restarted. Drop it (and the
+                # context that belonged to it) and launch a fresh one.
+                self._browser = None
+                self._context = None
 
-        if not self._browser:
-            # Reuse the running driver: a second async_playwright().start() per
-            # relaunch would leak a node process every time.
-            if self._playwright is None:
-                self._playwright = await async_playwright().start()
+            if not self._browser:
+                # Reuse the running driver: a second async_playwright().start() per
+                # relaunch would leak a node process every time.
+                if self._playwright is None:
+                    self._playwright = await async_playwright().start()
 
-            args = [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--no-first-run',
-                '--no-zygote',
-                '--disable-gpu',
-            ]
+                args = [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-accelerated-2d-canvas',
+                    '--no-first-run',
+                    '--no-zygote',
+                    '--disable-gpu',
+                ]
 
-            # Add stealth args
-            if HAS_STEALTH:
-                args.extend([
-                    '--disable-blink-features=AutomationControlled',
-                    '--disable-features=IsolateOrigins,site-per-process',
-                ])
+                # Add stealth args
+                if HAS_STEALTH:
+                    args.extend([
+                        '--disable-blink-features=AutomationControlled',
+                        '--disable-features=IsolateOrigins,site-per-process',
+                    ])
 
-            try:
-                browser = await self._playwright.chromium.launch(
-                    headless=settings.headless,
-                    args=args
-                )
-            except Exception:
-                # A failed launch can leave the driver unusable, so drop it:
-                # the next call starts a new one instead of failing forever.
-                await self._stop_driver()
-                raise
+                try:
+                    browser = await self._playwright.chromium.launch(
+                        headless=settings.headless,
+                        args=args
+                    )
+                except Exception:
+                    # A failed launch can leave the driver unusable, so drop it:
+                    # the next call starts a new one instead of failing forever.
+                    await self._stop_driver()
+                    raise
 
-            def on_disconnected(source: Browser) -> None:
-                # Forget only the browser that actually died: a late event from
-                # an old instance must not drop a healthy replacement.
-                if self._browser is source:
-                    self._browser = None
-                    self._context = None
+                def on_disconnected(source: Browser) -> None:
+                    # Forget only the browser that actually died: a late event from
+                    # an old instance must not drop a healthy replacement.
+                    if self._browser is source:
+                        self._browser = None
+                        self._context = None
 
-            browser.on("disconnected", on_disconnected)
-            self._browser = browser
+                browser.on("disconnected", on_disconnected)
+                self._browser = browser
 
-        return self._browser
+            return self._browser
 
     async def _stop_driver(self) -> None:
         """Best-effort Playwright driver shutdown; never raises."""

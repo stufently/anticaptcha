@@ -42,6 +42,7 @@ class FakeProcess:
         self.returncode = returncode
         self.exc = exc
         self.killed = False
+        self.waited = False
 
     async def communicate(self):
         if self.exc is not None:
@@ -50,6 +51,9 @@ class FakeProcess:
 
     def kill(self):
         self.killed = True
+
+    async def wait(self):
+        self.waited = True
 
 
 def install_fake_exec(monkeypatch, process):

@@ -69,6 +69,14 @@ kubectl apply -f argocd-application.yaml
 контролирует атакующий, поэтому админ-токен (credential только для API) в его
 окружение не попадает.
 
+⚠️ Фильтр токена действует **только на список `env`**. Если
+`worker.existingSecret` пуст, воркер подключает общий Secret (`existingSecret`)
+целиком через `envFrom`, и `ANTICAPTCHA_ADMIN_TOKEN` из него попадёт в
+контейнер воркера в обход фильтра. Поэтому, когда в общем Secret есть
+админ-токен, задай воркеру отдельный Secret без токена —
+`worker.existingSecret: anticaptcha-worker-secrets`: тогда через `envFrom`
+воркер получит только его.
+
 | Параметр | Описание | По умолчанию |
 |----------|----------|--------------|
 | `worker.existingSecret` | Secret только для воркера; пусто — берётся общий `existingSecret` | `""` |

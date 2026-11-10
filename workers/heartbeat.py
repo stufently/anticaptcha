@@ -7,6 +7,7 @@ stale and the pod is restarted.
 """
 import argparse
 import asyncio
+import math
 import os
 import sys
 import tempfile
@@ -43,16 +44,26 @@ def beat(path: str) -> None:
 
 
 def is_fresh(path: str, max_age: float, now: Optional[float] = None) -> bool:
-    """True only when `path` holds a numeric stamp no older than `max_age`."""
+    """True only when `path` holds a finite stamp within `max_age` of `now`.
+
+    The age is bounded on both sides: a stamp exactly `max_age` old is still
+    fresh, and a stamp from the future stays fresh only while it is at most
+    `max_age` ahead (clock skew between the worker and the probe). Anything
+    further away - `inf`, `nan`, or a wild future value - is stale, so a wedged
+    worker can never keep its liveness probe satisfied forever.
+    """
     try:
         with open(path, "r", encoding="ascii") as fh:
             stamp = float(fh.read().strip())
     except (OSError, ValueError):
         # Missing, unreadable or not a number: not fresh, never an exception
         return False
+    if not math.isfinite(stamp):
+        return False
     if now is None:
         now = time.time()
-    return (now - stamp) <= max_age
+    age = now - stamp
+    return -max_age <= age <= max_age
 
 
 async def heartbeat_loop(path: str, interval: float) -> None:
