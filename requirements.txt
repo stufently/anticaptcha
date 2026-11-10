@@ -1,3 +1,4 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
 # Web Framework
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
@@ -12,8 +13,10 @@ playwright==1.40.0
 playwright-stealth==2.0.3
 
 # ML & OCR
-torch==2.15.0
-torchvision==0.29.2
+# CPU-only wheels: no GPU in production; CUDA wheels add ~3 GB.
+# torchvision 0.29.2 has no +cpu build; 0.29.1+cpu verified with torch 2.15 (NMS + YOLO predict).
+torch==2.15.0+cpu
+torchvision==0.29.1+cpu
 easyocr==1.7.1
 opencv-python-headless==4.14.0.94
 ultralytics==8.4.118

@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Qwen Code CLI globally
-RUN npm install -g @qwen-code/qwen-code
+RUN npm install -g @qwen-code/qwen-code@0.27.1
 
 # Copy requirements
 COPY requirements.txt .
@@ -43,7 +43,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install Qwen Code SDK for Vision LLM
-RUN pip install --no-cache-dir qwen-code-sdk
+RUN pip install --no-cache-dir qwen-code-sdk==0.1.0rc0
 
 # YOLO checkpoints: torch.load(weights_only=True) + allow-list instead of full pickle
 ENV ULTRALYTICS_SAFE_LOAD=1
@@ -60,13 +60,13 @@ RUN mkdir -p /app/easyocr_models && \
 # Create directories
 RUN mkdir -p /app/data /app/models /home/anticaptcha/.qwen
 
-# Download YOLO models from official releases (with SHA256 verification)
+# Download YOLO models from official releases, verified by SHA256
 RUN wget -q https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt -O /app/models/yolov8n.pt && \
     wget -q https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8s.pt -O /app/models/yolov8s.pt && \
-    echo "Models downloaded successfully"
-
-# Copy custom model if exists (optional)
-COPY models/recaptcha_custom.pt /app/models/recaptcha_custom.pt 2>/dev/null || true
+    printf '%s  %s\n' \
+      f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36 /app/models/yolov8n.pt \
+      1f47a78bf100391c2a140b7ac73a1caae18c32779be7d310658112f7ac9aa78a /app/models/yolov8s.pt \
+      | sha256sum -c -
 
 # Copy qw2 settings for Vision LLM
 COPY config/qwen/settings.json /home/anticaptcha/.qwen/settings.json
