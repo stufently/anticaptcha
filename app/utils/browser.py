@@ -38,6 +38,20 @@ class BrowserManager:
                 if self._playwright is None:
                     self._playwright = await async_playwright().start()
 
+                # Why --no-sandbox stays: Chromium 158 (playwright 1.65) cannot be
+                # sandboxed in this deployment. The default docker seccomp profile
+                # blocks the unprivileged user namespaces the sandbox needs
+                # ("FATAL ... No usable sandbox!"), the SUID chrome_sandbox helper
+                # dies without root ("Zygote process exited prematurely with exit
+                # code 82", "not running as root" under no-new-privileges), and the
+                # --no-zygote below is rejected outright while the sandbox is on
+                # ("Zygote cannot be disabled if sandbox is enabled"). Only
+                # seccomp=unconfined / CAP_SYS_ADMIN would change that, and the
+                # chart grants neither. Playwright adds --no-sandbox itself while
+                # chromium_sandbox=False (its default), so the flag here only
+                # restates what runs. A renderer exploit on a client page therefore
+                # executes as uid 1000 in the worker: the mitigation is keeping
+                # Chromium current, see docs/specs/limits.md ("Browser sandbox").
                 args = [
                     '--no-sandbox',
                     '--disable-setuid-sandbox',

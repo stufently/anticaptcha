@@ -1,16 +1,18 @@
 """Background worker for processing CAPTCHA tasks"""
 import asyncio
 import json
+import time
 from datetime import datetime
 from sqlalchemy.orm import Session
 from app.database import SessionLocal, init_db
 from app.models.task import Task
 from app.models.stats import Stats
 from app.config import settings
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 
 # Import solvers
+from workers.cleanup import run_cleanup
 from workers.heartbeat import heartbeat_loop
 from workers.solvers.recaptcha import RecaptchaV2Solver, RecaptchaV3Solver
 from workers.solvers.hcaptcha import HcaptchaSolver
@@ -38,6 +40,8 @@ class TaskWorker:
         self.running = False
         self.solvers: Dict[str, Any] = {}
         self._recovery_pending = True
+        # Monotonic stamp of the last cleanup round (None = never run yet)
+        self._last_cleanup: Optional[float] = None
     
     async def setup_solvers(self):
         """Initialize all solvers"""
@@ -171,6 +175,35 @@ class TaskWorker:
             return
         self._recovery_pending = False
 
+    async def maybe_cleanup(self, now: Optional[float] = None) -> bool:
+        """Run the retention cleanup when its interval has elapsed.
+
+        The first call runs it at once (a fresh worker trims the backlog before
+        it starts polling), later ones every `settings.cleanup_interval_seconds`.
+        `now` defaults to `time.monotonic()`, so a wall-clock jump can neither
+        skip nor repeat a round. A failed round counts as a round too: retrying
+        every second against a locked or damaged database would spin the loop.
+
+        Returns True when `run_cleanup` was called.
+        """
+        if now is None:
+            now = time.monotonic()
+        last = self._last_cleanup
+        if last is not None and now - last < settings.cleanup_interval_seconds:
+            return False
+        self._last_cleanup = now
+        try:
+            # Off the event loop: the migration VACUUM is synchronous and, on the
+            # loop, would stall the heartbeat until the liveness probe killed the
+            # pod in the middle of it.
+            await asyncio.to_thread(run_cleanup)
+        except Exception as exc:
+            print(
+                f"⚠️ Cleanup failed: {type(exc).__name__}: {exc}",
+                flush=True,
+            )
+        return True
+
     async def run(self):
         """Main worker loop"""
         print("🚀 Task worker started")
@@ -204,6 +237,11 @@ class TaskWorker:
                 # stuck until the next restart.
                 if self._recovery_pending:
                     self._try_recover()
+
+                # Retention cleanup: after recovery (interrupted tasks are failed
+                # first, so they are visible to it) and before the session below,
+                # at most once per settings.cleanup_interval_seconds.
+                await self.maybe_cleanup()
 
                 db = SessionLocal()
                 try:

@@ -1,5 +1,6 @@
 """Task endpoints for CAPTCHA solving"""
 from fastapi import APIRouter, Depends, HTTPException, Header
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.task import Task
@@ -10,6 +11,10 @@ import json
 from typing import Optional
 
 router = APIRouter()
+
+# Statuses that occupy a slot of the per-key quota: the task is either waiting
+# for the worker or being solved right now.
+ACTIVE_STATUSES = ("pending", "processing")
 
 
 def get_api_key_and_user(
@@ -53,7 +58,31 @@ def create_task(
 ):
     """Create a new CAPTCHA solving task"""
     api_key, current_user = auth_data
-    
+
+    limit = settings.max_active_tasks_per_key
+    if limit > 0:
+        # Take the write lock BEFORE counting: a check-then-insert without it lets
+        # concurrent creates all read the old count and all insert (measured: five
+        # rows for a limit of one). BEGIN IMMEDIATE on this session's connection
+        # keeps the count and the insert in one transaction; the SELECTs that
+        # validated the API key do not start a transaction of their own in
+        # pysqlite, so this does not fail with "transaction within a transaction".
+        db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        active = db.execute(
+            select(func.count())
+            .select_from(Task)
+            .where(
+                Task.api_key_id == api_key.id,
+                Task.status.in_(ACTIVE_STATUSES),
+            )
+        ).scalar_one()
+        if active >= limit:
+            db.rollback()
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many active tasks for this API key: limit is {limit}",
+            )
+
     # Create task
     task = Task(
         api_key_id=api_key.id,

@@ -48,8 +48,29 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Install Qwen Code SDK for Vision LLM
 RUN pip install --no-cache-dir qwen-code-sdk==0.1.0rc0
 
+# Exactly one OpenCV distribution. ultralytics requires `opencv-python`
+# (opencv-python!=4.13.0.90,>=4.7.0) and easyocr requires `opencv-python-headless`,
+# and both install into the same `cv2/` — so the cv2 that gets imported is not
+# necessarily the pinned one. Uninstalling alone leaves `cv2/` broken (the files are
+# shared), hence the forced reinstall of the headless pin, whose version is read from
+# requirements.txt instead of being repeated here.
+# `pip check` now reports "ultralytics requires opencv-python, which is not
+# installed": expected and accepted — ultralytics only needs an importable cv2, and
+# the headless build provides it.
+RUN pip uninstall -y opencv-python && \
+    pip install --no-cache-dir --force-reinstall --no-deps \
+      "$(grep -E '^opencv-python-headless==' requirements.txt)"
+
 # YOLO checkpoints: torch.load(weights_only=True) + allow-list instead of full pickle
 ENV ULTRALYTICS_SAFE_LOAD=1
+
+# ultralytics patches PIL.Image.open and, on ANY failure to open an image, tries to
+# `pip install pi-heif` at runtime — from uid 1000 inside the worker, during a request.
+# HEIF is not a client format we accept (ALLOWED_IMAGE_FORMATS: PNG/JPEG/WEBP/BMP), so
+# the auto-install is switched off rather than satisfied: pi-heif is NOT added to the
+# image. The bypass of that patch lives in workers/solvers/image_text.py::_open_header
+# and depends on the pinned ultralytics (ultralytics.utils.patches._image_open).
+ENV YOLO_AUTOINSTALL=false
 
 # Install Playwright browsers to a global location
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright

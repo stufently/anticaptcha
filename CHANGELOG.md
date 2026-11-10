@@ -37,6 +37,22 @@
   фильтрации токена: фильтр `ANTICAPTCHA_ADMIN_TOKEN` действует только на список
   `env`, а при пустом `worker.existingSecret` воркер получает общий Secret
   целиком через `envFrom`, вместе с токеном.
+- Playwright 1.40.0 → 1.65.0, то есть Chromium 120.0.6099.28 (ноябрь 2023) →
+  158.0.8127.18. Песочницу в нашем запуске включить нельзя: дефолтный seccomp
+  docker режет unprivileged user namespaces (`FATAL … No usable sandbox!`),
+  setuid-помощник `chrome_sandbox` без root не работает
+  (`Zygote process exited prematurely with exit code 82`, а с
+  `no-new-privileges` — `not running as root`), а `--no-zygote` с включённой
+  песочницей отвергается самим Chromium. Значит `--no-sandbox` остаётся, и
+  эксплойт рендерера на странице клиента даёт код в воркере от uid 1000 —
+  единственная доступная защита здесь держать Chromium свежим. Обоснование
+  комментарием в `app/utils/browser.py` и в `docs/specs/limits.md`.
+- В образе выключена авто-установка пакетов ultralytics
+  (`ENV YOLO_AUTOINSTALL=false`). ultralytics подменяет `PIL.Image.open` и при
+  ЛЮБОЙ ошибке открытия зовёт `check_requirements("pi-heif")`: с сетью это
+  установка чужого кода через pip от uid 1000 во время обработки задачи.
+  `pi-heif` в образ НЕ добавлен — HEIF не входит в `ALLOWED_IMAGE_FORMATS`
+  (PNG/JPEG/WEBP/BMP) и клиенту не нужен.
 
 ### Added
 - Heartbeat воркера (`workers/heartbeat.py`): `beat()` атомарно пишет метку
@@ -56,6 +72,44 @@
   следующий вызов поднял новый.
 - `tests/test_m1_gaps.py` — 17 тестов на дыры, которые вскрыл независимый
   мутационный прогон M1 (11 из 28 мутантов выжили), и на дефекты D1/D2/J1/R/B.
+- Квота активных задач на API-ключ: `POST /api/v1/task` считает задачи этого
+  ключа в статусах `pending`/`processing` одним SQL `COUNT` и при достижении
+  лимита отдаёт 429 `Too many active tasks for this API key: limit is N`.
+  Замок пишущего (`BEGIN IMMEDIATE` на соединении сессии) берётся ДО подсчёта:
+  без него одновременные запросы все читают старое число и все вставляют
+  (замер: 5 строк при лимите 1). Настройка
+  `ANTICAPTCHA_MAX_ACTIVE_TASKS_PER_KEY` (20; 0 = без лимита), читается на
+  каждый запрос.
+- Чистка базы по срокам хранения (`workers/cleanup.py`): `purge_tasks()`
+  батчами не больше `batch_size` (100) строк, каждый со своим commit, сначала
+  удаляет задачи `solved`/`failed` старше `ANTICAPTCHA_TASK_RETENTION_DAYS` (7),
+  затем обнуляет `input_data` (до 5 МБ base64 на задачу) у `solved`/`failed`
+  старше `ANTICAPTCHA_INPUT_RETENTION_HOURS` (1); сравнение возраста строгое,
+  `pending`/`processing`, `result`, `error_message` и таблица `stats` не
+  трогаются. Пустой `input_data` — признак «вход вычищен»: API не может создать
+  задачу с `""` (`json.dumps` даёт минимум `{}`), а воркер разбирает вход только
+  у задачи, взятой из pending. `reclaim_space()` мигрирует старую базу
+  (`auto_vacuum != 2`) в INCREMENTAL одним полным `VACUUM`, а уже мигрированную
+  освобождает `incremental_vacuum` до пустого freelist и усекает `-wal`
+  (`wal_checkpoint(TRUNCATE)`) — иначе бэкап, копирующий файл базы, всё равно
+  видит прежний размер. `run_cleanup()` = purge, затем reclaim.
+- Воркер зовёт чистку сам: `TaskWorker.maybe_cleanup()` в цикле опроса, первый
+  раз сразу (после восстановления прерванных задач), дальше раз в
+  `ANTICAPTCHA_CLEANUP_INTERVAL_SECONDS` (600) по `time.monotonic()`, запуск
+  через `asyncio.to_thread` — синхронный `VACUUM` в потоке event loop остановил
+  бы heartbeat, и liveness-проба убила бы под посреди VACUUM. Сбой чистки
+  логируется и не пробрасывается, интервал отсчитывается и от неудачного запуска.
+- `PRAGMA auto_vacuum=INCREMENTAL` в слушателе `connect` (`app/database.py`)
+  ПЕРЕД `journal_mode=WAL`: в обратном порядке новая база создаётся с
+  `auto_vacuum=0` (замер на sqlite 3.46.1), а на существующей базе pragma без
+  `VACUUM` ничего не меняет — её мигрирует первая чистка.
+- `tests/test_quota.py` (6 тестов) и `tests/test_cleanup.py` (19) плюс
+  мутационный гейт `tests/mutation_gate_m2.py`: 16 мутантов (без `BEGIN
+  IMMEDIATE`, processing вне квоты, `>=` → `>`, 0 вместо «без лимита», purge без
+  фильтра статуса, `<` → `<=` у обоих сроков, без `LIMIT` в батче удаления и
+  обнуления, `incremental_vacuum` не до конца, pragma после WAL, без
+  `wal_checkpoint`, проброс исключения чистки, inline вместо `to_thread`, цикл
+  без `maybe_cleanup`) — все 16 убиты своими тестами на своих ассертах.
 
 ### Fixed
 - qwen CLI запускается в отдельной сессии (`start_new_session=True`), а при
@@ -91,6 +145,19 @@
 - `BrowserManager.get_browser()` закрыт `asyncio.Lock`: два одновременных
   вызова больше не запускают каждый свой Chromium, и неудачный запуск не
   останавливает общий драйвер, убивая браузер соседа.
+- В образе были ДВЕ дистрибуции OpenCV вместо одной. `pip list` показывал
+  `opencv-python 5.0.0.93` (её тянет ultralytics: `opencv-python!=4.13.0.90,>=4.7.0`)
+  и `opencv-python-headless 4.14.0.94` (её тянет easyocr), обе пишут в один
+  `cv2/`, и импортировался не тот пакет, который запинен в `requirements.txt`:
+  `cv2.__version__` был `5.0.0`. Теперь Dockerfile после установки зависимостей
+  удаляет `opencv-python` и переустанавливает headless
+  (`--force-reinstall --no-deps`, версия берётся grep'ом из `requirements.txt`,
+  пин поднят до `5.0.0.93` — то, что фактически грузилось, и последний релиз).
+  Удаление без переустановки ломает `cv2/` (файлы общие), поэтому reinstall
+  обязателен. `pip check` теперь пишет «ultralytics requires opencv-python,
+  which is not installed» — ожидаемо: ultralytics нужен импортируемый `cv2`,
+  headless-сборка его даёт (проверено: YOLO `predict` и `easyocr.readtext`
+  работают, ultralytics при predict ничего не доустанавливает).
 
 ### Known limitations
 - Остановка qwen CLI (`_reap`): `killpg` выполняется, только пока лидер не

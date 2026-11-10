@@ -22,8 +22,12 @@ engine = create_engine(
 def _sqlite_pragmas(dbapi_connection, connection_record):
     """API and worker are separate processes writing one SQLite file: WAL lets
     readers and the writer work concurrently, busy_timeout retries on a lock
-    instead of raising "database is locked"."""
+    instead of raising "database is locked". auto_vacuum lets the cleanup job
+    hand freed pages back to the filesystem; it only takes effect on a new
+    database when it is set BEFORE journal_mode=WAL (measured on sqlite 3.46.1),
+    and an existing database is migrated by workers/cleanup.py::reclaim_space."""
     cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA auto_vacuum=INCREMENTAL")
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA busy_timeout=5000")
     cursor.close()
