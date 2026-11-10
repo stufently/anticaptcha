@@ -1,8 +1,21 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.1] - 2026-11-10
 
-### Fixed (2026-11-10)
+### Fixed
+- EasyOCR создаётся с `quantize=False` (рантайм и прогрев в Dockerfile):
+  квантованный LSTM torch требует AVX2/FMA, на CPU без них (Ivy Bridge)
+  воркер падал SIGILL (exit 132) на первой image_text задаче.
+- Задачи, оставшиеся в `processing` после падения воркера, при его старте
+  переводятся в failed («worker restarted while processing the task»), а не
+  висят вечно; в pending не возвращаются, чтобы задача-убийца не зациклила
+  crash-loop.
+- `YOLO_CONFIG_DIR` в образе: Ultralytics больше не предупреждает о
+  незаписываемом каталоге и не уходит в `/tmp`.
+
+## [1.0.0] - 2026-11-10
+
+### Fixed
 - Воркер больше не падает на старте: EasyOCR прогревается и читается из одного
   пути (`$EASYOCR_MODULE_PATH/model`, `user_network`), рантайм с `download_enabled=False`.
 - reCAPTCHA v2 ищет YOLO так же, как `YOLOClassifier` (`ANTICAPTCHA_MODELS_DIR`:
