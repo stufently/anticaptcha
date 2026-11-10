@@ -59,7 +59,10 @@ _REAP_TIMEOUT = 5.0
 async def _reap(process) -> None:
     """Kill the qwen CLI with its whole process group, then reap it, bounded."""
     pid = getattr(process, "pid", None)
-    if isinstance(pid, int) and pid > 0:
+    # Only while the leader is unreaped: its PID (and so the group ID) cannot
+    # be reused yet. Once asyncio has reaped it, the number may belong to an
+    # unrelated process group.
+    if process.returncode is None and isinstance(pid, int) and pid > 0:
         try:
             os.killpg(pid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
