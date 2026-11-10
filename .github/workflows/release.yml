@@ -20,6 +20,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Free runner disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker image prune -af
+          df -h /
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -57,12 +64,22 @@ jobs:
           fi
           echo "✅ Tag version matches chart version: $TAG_VERSION"
 
-      - name: Build and test Docker image
-        run: |
-          docker build -t anticaptcha:test .
-          docker run --rm --network none -v "$PWD/tests:/app/tests:ro" anticaptcha:test python -m pytest tests -q -p no:cacheprovider
+      # One build only: the image is ~7 GB of layers and the runner has ~14 GB
+      # free, two copies (plain docker build + buildx) risk ENOSPC.
+      - name: Build image for test (loaded into local docker)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          push: false
+          tags: anticaptcha:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Build and push Docker image
+      - name: Test image
+        run: docker run --rm --network none -v "$PWD/tests:/app/tests:ro" anticaptcha:test python -m pytest tests -q -p no:cacheprovider
+
+      - name: Push image (same builder, layers from cache)
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -72,4 +89,3 @@ jobs:
             ${{ steps.meta.outputs.labels }}
             org.opencontainers.image.source=https://github.com/stufently/anticaptcha
           cache-from: type=gha
-          cache-to: type=gha,mode=max

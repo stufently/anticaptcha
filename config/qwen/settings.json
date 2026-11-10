@@ -26,5 +26,10 @@
         "name": "Kimi K2.5 (Vision)"
       }
     ]
+  },
+  "security": {
+    "auth": {
+      "selectedType": "openai"
+    }
   }
 }

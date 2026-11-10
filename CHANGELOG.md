@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+### Fixed (2026-11-10)
+- Воркер больше не падает на старте: EasyOCR прогревается и читается из одного
+  пути (`$EASYOCR_MODULE_PATH/model`, `user_network`), рантайм с `download_enabled=False`.
+- reCAPTCHA v2 ищет YOLO так же, как `YOLOClassifier` (`ANTICAPTCHA_MODELS_DIR`:
+  `recaptcha_custom.pt` → `yolov8s.pt` → `yolov8n.pt`), без скачивания.
+- Сбой `setup()` одного солвера не роняет воркер: солвер пропускается с логом,
+  его задачи уходят в failed (`No solver for task type`).
+- Первая решённая задача на пустой базе больше не уходит в failed (Stats с
+  нулевыми счётчиками, таблица `stats` создаётся `init_db`); сбой статистики
+  только логируется.
+- Таймаут решения `ANTICAPTCHA_TASK_TIMEOUT` (120 с): зависший солвер → failed,
+  воркер берёт следующую задачу.
+- Единая SSRF-проверка `page_url` (`workers/solvers/url_guard.py`) для
+  reCAPTCHA v2/v3, hCaptcha, Turnstile: только http/https, без
+  localhost/частных/link-local/CGNAT адресов, в том числе после DNS-резолва.
+- Лимит тела запроса `ANTICAPTCHA_MAX_BODY_BYTES` (5 МБ): 413 до авторизации.
+- SQLite: WAL + `busy_timeout` для параллельной записи API и воркера.
+- `init_db.py` просто создаёт таблицы (был битый импорт и учётка с
+  известным паролем).
+- qwen CLI: в `config/qwen/settings.json` выбран тип авторизации `openai`.
+- Release workflow: одна сборка образа (load → тест → push из кэша), очистка
+  диска раннера.
+- `PYTHONUNBUFFERED=1` в образе: логи воркера сразу видны в `docker logs`.
+
 ### Added
 - Базовая инфраструктура FastAPI с REST API
 - База данных SQLite с моделями Task, User, APIKey, Stats
