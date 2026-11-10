@@ -1,7 +1,9 @@
 """Image-to-text CAPTCHA solver using OCR"""
 from typing import Dict, Any
+import asyncio
 import base64
 import io
+import threading
 from app.utils.captcha_solver import BaseSolver
 
 
@@ -11,6 +13,9 @@ class ImageTextSolver(BaseSolver):
     def __init__(self):
         super().__init__()
         self.reader = None
+        # easyocr.Reader is not safe for concurrent calls, and a timed-out
+        # task's thread keeps running: the next OCR must wait for it.
+        self._ocr_lock = threading.Lock()
     
     async def setup(self):
         """Initialize OCR model"""
@@ -56,20 +61,20 @@ class ImageTextSolver(BaseSolver):
         if not image_base64:
             raise ValueError("Missing image data")
         
-        # Decode image
+        # Decode + OCR are synchronous and CPU-heavy: run them in a thread so
+        # the event loop (and the worker's task timeout) keeps working. On
+        # timeout the awaiting coroutine is cancelled and the thread's result
+        # is simply dropped; the task stays failed.
+        return await asyncio.to_thread(self._ocr, image_base64)
+
+    def _ocr(self, image_base64: str) -> Dict[str, Any]:
         image_bytes = base64.b64decode(image_base64)
-        
-        # Preprocess image
         processed_image = self._preprocess_image(image_bytes)
-        
-        # Apply OCR
-        result = self.reader.readtext(processed_image)
-        
-        # Extract text
+        with self._ocr_lock:
+            result = self.reader.readtext(processed_image)
         if result:
             text = ' '.join([r[1] for r in result]).strip()
             return {"text": text}
-        
         return {"text": ""}
     
     def _preprocess_image(self, image_bytes: bytes):
