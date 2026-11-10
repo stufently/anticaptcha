@@ -14,9 +14,11 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, nullable=False)
     password_hash = Column(String(64), nullable=False)
+    password_salt = Column(String(32), nullable=True)  # Salt for password hashing
     is_active = Column(Boolean, default=True)
+    is_admin = Column(Boolean, default=False)  # Admin flag
     created_at = Column(DateTime, server_default=func.now())
-    
+
     # Relationships
     api_keys = relationship("APIKey", back_populates="user")
 

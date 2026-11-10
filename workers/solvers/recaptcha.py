@@ -107,7 +107,30 @@ class RecaptchaV2Solver(BaseSolver):
         
         if not site_key or not page_url:
             raise ValueError("Missing site_key or page_url")
+
+        # Validate URL to prevent SSRF
+        from urllib.parse import urlparse
+        parsed = urlparse(page_url)
         
+        # Block internal/private networks
+        if parsed.hostname in ['localhost', '127.0.0.1', '0.0.0.0', '::1']:
+            raise ValueError("Localhost URLs not allowed")
+        
+        # Block private IP ranges
+        import ipaddress
+        try:
+            ip = ipaddress.ip_address(parsed.hostname)
+            if ip.is_private or ip.is_loopback or ip.is_reserved:
+                raise ValueError("Private IP addresses not allowed")
+        except ValueError as e:
+            if "Private IP" in str(e) or "Localhost" in str(e):
+                raise
+            # Not an IP, it's a hostname - allow it
+        
+        # Block cloud metadata endpoints
+        if 'metadata' in parsed.hostname.lower() or '169.254.169.254' in page_url:
+            raise ValueError("Metadata endpoints not allowed")
+
         # Create stealth page
         page = await browser_manager.new_page(stealth=True)
         

@@ -1,23 +1,28 @@
 version: '3.8'
 
 services:
-  anticaptcha:
+  # API Server
+  anticaptcha-api:
     build:
       context: .
       dockerfile: Dockerfile
     image: anticaptcha:latest
-    container_name: anticaptcha
+    container_name: anticaptcha-api
     ports:
       - "8000:8000"
     environment:
       - DATABASE_URL=sqlite+aiosqlite:///./data/anticaptcha.db
       - LOG_LEVEL=INFO
       - WORKERS_COUNT=4
+      # Optional: Qwen API key for Vision LLM
+      # - QWEN_API_KEY=${QWEN_API_KEY}
     volumes:
       - anticaptcha-data:/app/data
       - anticaptcha-models:/app/models
       - ./workers:/app/workers:ro
       - ./app:/app/app:ro
+      # Optional: Mount qw2 configuration for Vision LLM
+      # - ~/.qwen:/home/deploy/.qwen:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -27,6 +32,34 @@ services:
       start_period: 40s
     networks:
       - anticaptcha-network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  # Background Worker
+  anticaptcha-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: anticaptcha:latest
+    container_name: anticaptcha-worker
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:///./data/anticaptcha.db
+      - LOG_LEVEL=INFO
+      - WORKERS_COUNT=4
+      # Optional: Qwen API key for Vision LLM
+      # - QWEN_API_KEY=${QWEN_API_KEY}
+    volumes:
+      - anticaptcha-data:/app/data
+      - anticaptcha-models:/app/models
+      - ./workers:/app/workers:ro
+      - ./app:/app/app:ro
+      # Optional: Mount qw2 configuration for Vision LLM
+      # - ~/.qwen:/home/deploy/.qwen:ro
+    restart: unless-stopped
+    depends_on:
+      - anticaptcha-api
+    networks:
+      - anticaptcha-network
+    command: python -m workers.task_worker
 
   # Optional: Redis для кэширования
   redis:
