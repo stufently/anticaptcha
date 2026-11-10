@@ -62,7 +62,7 @@ docker-compose --profile with-postgres up -d
 Измените `DATABASE_URL` в `docker-compose.yml`:
 ```yaml
 environment:
-  - DATABASE_URL=postgresql://anticaptcha:anticaptcha_secret@postgres:5432/anticaptcha
+  - DATABASE_URL=postgresql://anticaptcha:${POSTGRES_PASSWORD}@postgres:5432/anticaptcha
 ```
 
 ### 4. С Nginx (reverse proxy)

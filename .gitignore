@@ -45,3 +45,10 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+# Local artifacts that must never reach the public repo
+/*.png
+/*.jpg
+/*.html
+runs/
+*.pt
+/*.log

@@ -9,7 +9,7 @@ services:
     image: anticaptcha:latest
     container_name: anticaptcha-api
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       - ANTICAPTCHA_DATABASE_PATH=/app/data/anticaptcha.db
       - ANTICAPTCHA_MODELS_DIR=/app/models
@@ -70,7 +70,7 @@ services:
     image: redis:7-alpine
     container_name: anticaptcha-redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
     restart: unless-stopped
@@ -86,9 +86,9 @@ services:
     environment:
       - POSTGRES_DB=anticaptcha
       - POSTGRES_USER=anticaptcha
-      - POSTGRES_PASSWORD=anticaptcha_secret
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     restart: unless-stopped
