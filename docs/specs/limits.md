@@ -30,7 +30,8 @@
 
 ### API
 - **Rate limit:** None (local service)
-- **Auth:** API key in X-API-Key header
+- **Auth:** `Authorization: Bearer <token>` — client API key for `/api/v1/task*`; admin token (`ANTICAPTCHA_ADMIN_TOKEN`) or an admin user's API key for `/api/v1/user` and `/api/v1/api-key/*`
+- **Registration:** closed — users are created only by an admin (HTTP API or `python -m app.cli create-user`)
 - **Max retries:** 3
 
 ### ML Models
@@ -70,6 +71,6 @@ Current architecture is designed for **single user, local use**. For scaling:
 ## Security Limits
 
 - API keys stored as SHA-256 hashes
-- Passwords hashed with bcrypt
+- Passwords hashed with salted SHA-256
 - No HTTPS (local network only)
 - No rate limiting (trusted local user)

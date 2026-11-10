@@ -26,7 +26,7 @@
 docker build -t anticaptcha .
 
 # Запуск API сервера
-docker run -d -p 8000:8000 \
+docker run -d --name anticaptcha-api -p 8000:8000 \
   -v $(pwd)/data:/app/data \
   -e ANTICAPTCHA_ADMIN_TOKEN=your-secret-token \
   anticaptcha
@@ -52,11 +52,16 @@ ANTICAPTCHA_ADMIN_TOKEN=your-secret-token python run_worker.py
 
 ### Создание первого пользователя и API ключа
 
+Регистрации нет: пользователей создаёт только админ. Первичный выпуск — двумя способами:
+
+- через CLI внутри контейнера (пишет напрямую в базу, admin token не нужен);
+- через HTTP API с `Authorization: Bearer <ANTICAPTCHA_ADMIN_TOKEN>` (см. ниже).
+
 ```bash
-# Создать пользователя через CLI (требует admin token)
+# Создать пользователя: create-user <username> <password> [--admin]
 docker exec -it anticaptcha-api python -m app.cli create-user admin password123 --admin
 
-# Создать API ключ для пользователя
+# Выпустить API ключ: create-key <username> (ключ печатается один раз)
 docker exec -it anticaptcha-api python -m app.cli create-key admin
 ```
 
@@ -78,18 +83,34 @@ docker exec -it anticaptcha-api python -m app.cli create-key admin
 - **Swagger UI:** http://localhost:8000/docs
 - **ReDoc:** http://localhost:8000/redoc
 
-## Создание пользователя и API ключа
+## Авторизация
+
+Все защищённые эндпоинты принимают заголовок `Authorization: Bearer <token>`:
+
+| Эндпоинт | Токен |
+|---|---|
+| `POST /api/v1/task`, `GET /api/v1/task/{task_id}` | API ключ клиента (`ac_...`); admin token здесь не принимается |
+| `POST /api/v1/user` | `ANTICAPTCHA_ADMIN_TOKEN` или API ключ пользователя-админа |
+| `POST /api/v1/api-key/{user_id}` | `ANTICAPTCHA_ADMIN_TOKEN` или ключ админа — для любого пользователя; ключ обычного пользователя — только для себя |
+
+Без заголовка или с неверным форматом — `401`; не-админ на `POST /api/v1/user` — `403`.
+
+## Создание пользователя и API ключа (админ)
 
 ```bash
-# Создать пользователя
+# Создать пользователя (только админ)
 curl -X POST http://localhost:8000/api/v1/user \
+  -H "Authorization: Bearer $ANTICAPTCHA_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"username": "myuser", "password": "mypassword"}'
 
-# Сгенерировать API ключ (сохраните ключ!)
-curl -X POST http://localhost:8000/api/v1/api-key/1
+# Ответ: {"id": 2, "username": "myuser", "is_active": true, "created_at": "...", "api_keys": []}
 
-# Ответ: {"id": 1, "key": "ac_xxxx...", "is_active": true}
+# Выпустить API ключ пользователю с id=2 (ключ показывается один раз — сохраните!)
+curl -X POST http://localhost:8000/api/v1/api-key/2 \
+  -H "Authorization: Bearer $ANTICAPTCHA_ADMIN_TOKEN"
+
+# Ответ: {"id": 1, "key": "ac_xxxx...", "is_active": true, "created_at": "..."}
 ```
 
 ## Создание задачи
@@ -98,7 +119,7 @@ curl -X POST http://localhost:8000/api/v1/api-key/1
 # Image-to-text CAPTCHA
 curl -X POST http://localhost:8000/api/v1/task \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: ac_xxxx..." \
+  -H "Authorization: Bearer ac_xxxx..." \
   -d '{
     "type": "image_text",
     "input_data": {
@@ -114,13 +135,14 @@ curl -X POST http://localhost:8000/api/v1/task \
 ```bash
 # Получить результат задачи
 curl -X GET http://localhost:8000/api/v1/task/1 \
-  -H "X-API-Key: ac_xxxx..."
+  -H "Authorization: Bearer ac_xxxx..."
 
 # Ответ:
 {
   "task_id": 1,
   "status": "solved",
   "result": {"text": "CAPTCHA_TEXT"},
+  "error": null,
   "created_at": "2026-11-05T10:00:00",
   "solved_at": "2026-11-05T10:00:05"
 }
