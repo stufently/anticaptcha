@@ -86,16 +86,28 @@
   `VACUUM` on the event loop would stop the heartbeat and the liveness probe
   would kill the pod in the middle of it. A failed round is logged, not raised,
   and still starts the next interval.
-- **Known limitation — task_id reuse:** `tasks.id` is an SQLite `INTEGER PRIMARY
-  KEY` without AUTOINCREMENT (no `sqlite_sequence` table), so rowids are handed
-  out again. If a purge deletes the row with the highest id — in practice when no
-  new task was created for a whole `task_retention_days` — the next created task
-  takes that id back, and a client that kept the old id reads its own NEW task
-  instead of a 404 (measured). It cannot read another key's task: `get_task`
-  filters on `api_key_id` as well. Under normal traffic the newest row survives,
-  ids stay monotonic and nothing is reused. Removing the limitation needs
-  `autoincrement=True` on `Task.id` plus a migration for existing databases,
-  which the project has no mechanism for yet.
+- **Task ids are never reused:** `tasks` is created with `__table_args__ =
+  {"sqlite_autoincrement": True}`, so SQLite keeps the highest id ever used in
+  `sqlite_sequence` and hands out the id after it. A purge that deletes the row
+  with the highest id no longer gives that id back, and a client that kept an old
+  id gets a 404 instead of its own NEW task. `autoincrement=True` on the `Task.id`
+  column does **not** emit AUTOINCREMENT on SQLite (measured on SQLAlchemy
+  2.0.23) — only the table argument does.
+- **Existing databases are migrated by `init_db()`:** SQLite cannot add
+  AUTOINCREMENT with `ALTER TABLE`, so `_migrate_tasks_autoincrement()`
+  (`app/database.py`) rebuilds a `tasks` table whose DDL in `sqlite_master` has no
+  AUTOINCREMENT — rename it, drop the indexes that moved with it (they keep their
+  names, `ix_tasks_id` among them), create the table from the model, copy the rows
+  back (which seeds `sqlite_sequence` with `max(id)`), drop the temporary table.
+  The column list comes from `Task.__table__.columns`. With no table, or with a
+  DDL that already has AUTOINCREMENT, it returns `False` and touches nothing, so a
+  repeated `init_db()` changes nothing.
+- **`init_db()` is serialized:** the API and the worker both call it at startup
+  and on a fresh volume they start at the same moment. Table creation and the
+  migration run in ONE `BEGIN IMMEDIATE` transaction on one connection; without
+  the writer lock the second `create_all` died on `table users already exists`
+  (reproduced). Now the loser waits out the lock (`busy_timeout` 5 s) and sees the
+  tables the winner committed.
 - The chart sets none of these values — the code defaults above apply.
 
 ### Client images (`image_text`)

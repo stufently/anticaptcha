@@ -8,6 +8,10 @@ from app.database import Base
 class Task(Base):
     """CAPTCHA solving task"""
     __tablename__ = "tasks"
+    # Column(autoincrement=True) alone does not emit AUTOINCREMENT on SQLite
+    # (measured on SQLAlchemy 2.0.23); only this table argument does. Without it
+    # a purge that removes the newest row gives its id to the next task.
+    __table_args__ = {"sqlite_autoincrement": True}
 
     id = Column(Integer, primary_key=True, index=True)
     api_key_id = Column(Integer, ForeignKey("api_keys.id"), nullable=False)
