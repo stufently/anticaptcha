@@ -16,6 +16,7 @@ except ImportError:
 
 from workers.classifiers.vision_llm import VisionLLMClassifier
 import json
+from workers.solvers.url_guard import validate_page_url
 
 # Optional: numpy for image processing
 try:
@@ -49,42 +50,26 @@ class RecaptchaV2Solver(BaseSolver):
     def __init__(self):
         super().__init__()
         self.yolo_model = None
-        self.custom_model = None
         self.vision_classifier = None
     
     async def setup(self):
         """Setup solver and load Yolo model"""
         if HAS_ML:
             try:
-                # Load larger model if available (YOLOv8s more accurate than YOLOv8n)
-                large_model = Path('/app/data/yolov8s.pt')
-                small_model = Path('/app/data/yolov8n.pt')
-                custom_model = Path('/app/runs/detect/recaptcha_custom/weights/best.pt')
-                
-                if large_model.exists():
-                    print(f"✅ Loading YOLOv8s (larger, more accurate)")
-                    self.yolo_model = YOLO(str(large_model))
-                elif small_model.exists():
-                    print(f"✅ Loading YOLOv8n")
-                    self.yolo_model = YOLO(str(small_model))
-                else:
-                    self.yolo_model = YOLO('yolov8n.pt')
-                
-                # Also load custom model for specific classes
-                if custom_model.exists():
-                    print(f"✅ Loading custom trained model")
-                    self.custom_model = YOLO(str(custom_model))
-                else:
-                    self.custom_model = None
-                
-                print("✅ Yolo models loaded for reCAPTCHA")
-                
-                # Initialize vision classifier
-                self.vision_classifier = VisionLLMClassifier()
-                print("✅ Vision LLM classifier initialized")
+                # Same lookup as YOLOClassifier: settings.models_dir,
+                # recaptcha_custom.pt > yolov8s.pt > yolov8n.pt, never a download.
+                from workers.classifiers.yolo import find_yolo_model
+                model_path = find_yolo_model(settings.models_dir)
+                print(f"✅ Loading YOLO model from {model_path}")
+                self.yolo_model = YOLO(str(model_path))
+                print("✅ Yolo model loaded for reCAPTCHA")
             except Exception as e:
-                print(f"⚠️ Could not load Yolo: {e}")
-    
+                print(f"❌ reCAPTCHA: YOLO model not loaded ({type(e).__name__}: {e})")
+
+        # Vision LLM is the primary tile classifier; it does not depend on YOLO.
+        self.vision_classifier = VisionLLMClassifier()
+        print("✅ Vision LLM classifier initialized")
+
     async def cleanup(self):
         """Cleanup resources"""
         pass
@@ -108,28 +93,8 @@ class RecaptchaV2Solver(BaseSolver):
         if not site_key or not page_url:
             raise ValueError("Missing site_key or page_url")
 
-        # Validate URL to prevent SSRF
-        from urllib.parse import urlparse
-        parsed = urlparse(page_url)
-        
-        # Block internal/private networks
-        if parsed.hostname in ['localhost', '127.0.0.1', '0.0.0.0', '::1']:
-            raise ValueError("Localhost URLs not allowed")
-        
-        # Block private IP ranges
-        import ipaddress
-        try:
-            ip = ipaddress.ip_address(parsed.hostname)
-            if ip.is_private or ip.is_loopback or ip.is_reserved:
-                raise ValueError("Private IP addresses not allowed")
-        except ValueError as e:
-            if "Private IP" in str(e) or "Localhost" in str(e):
-                raise
-            # Not an IP, it's a hostname - allow it
-        
-        # Block cloud metadata endpoints
-        if 'metadata' in parsed.hostname.lower() or '169.254.169.254' in page_url:
-            raise ValueError("Metadata endpoints not allowed")
+        # SSRF guard before the browser is touched (shared by all URL solvers)
+        await asyncio.to_thread(validate_page_url, page_url)
 
         # Create stealth page
         page = await browser_manager.new_page(stealth=True)
@@ -568,7 +533,10 @@ class RecaptchaV3Solver(BaseSolver):
         
         if not site_key or not page_url:
             raise ValueError("Missing site_key or page_url")
-        
+
+        # SSRF guard before the browser is touched (shared by all URL solvers)
+        await asyncio.to_thread(validate_page_url, page_url)
+
         page = await browser_manager.new_page()
         
         try:

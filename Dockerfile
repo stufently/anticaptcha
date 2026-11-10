@@ -1,5 +1,8 @@
 FROM python:3.11-slim
 
+# Worker/API logs must reach `docker logs` / kubectl logs without buffering
+ENV PYTHONUNBUFFERED=1
+
 # Set working directory
 WORKDIR /app
 
@@ -52,10 +55,16 @@ ENV ULTRALYTICS_SAFE_LOAD=1
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN playwright install chromium
 
-# Pre-download EasyOCR models (outside /app/data to avoid PVC override)
+# Pre-download EasyOCR models (outside /app/data to avoid PVC override).
+# No explicit directories: easyocr derives model/ and user_network/ from
+# EASYOCR_MODULE_PATH, the same way the runtime Reader does (download disabled
+# there). The check fails the build if the layout ever diverges.
 ENV EASYOCR_MODULE_PATH=/app/easyocr_models
-RUN mkdir -p /app/easyocr_models && \
-    python -c "import easyocr; easyocr.Reader(['en'], gpu=False, model_storage_directory='/app/easyocr_models')"
+RUN python -c "import easyocr; easyocr.Reader(['en'], gpu=False)" && \
+    python -c "import easyocr; easyocr.Reader(['en'], gpu=False, download_enabled=False)" && \
+    test -f "$EASYOCR_MODULE_PATH/model/craft_mlt_25k.pth" && \
+    test -f "$EASYOCR_MODULE_PATH/model/english_g2.pth" && \
+    test -d "$EASYOCR_MODULE_PATH/user_network"
 
 # Create directories
 RUN mkdir -p /app/data /app/models /home/anticaptcha/.qwen
@@ -78,7 +87,7 @@ COPY init_db.py run_worker.py ./
 
 # Create non-root user
 RUN useradd -m -u 1000 -s /bin/bash anticaptcha && \
-    chown -R anticaptcha:anticaptcha /app /ms-playwright /app/easyocr_models /home/anticaptcha
+    chown -R anticaptcha:anticaptcha /app /ms-playwright /home/anticaptcha
 
 # Set HOME for qwen
 ENV HOME=/home/anticaptcha

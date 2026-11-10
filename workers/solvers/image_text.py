@@ -18,7 +18,10 @@ class ImageTextSolver(BaseSolver):
             import easyocr
             import cv2
             import numpy as np
-            self.reader = easyocr.Reader(['en'], gpu=False)
+            # Model dirs come from easyocr itself ($EASYOCR_MODULE_PATH/model and
+            # /user_network), exactly as in the Dockerfile warm-up. No downloads at
+            # runtime: missing weights must fail loudly, not hit the internet.
+            self.reader = easyocr.Reader(['en'], gpu=False, download_enabled=False)
             self.cv2 = cv2
             self.np = np
             print("✅ EasyOCR initialized")

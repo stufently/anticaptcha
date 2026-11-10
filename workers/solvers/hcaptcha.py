@@ -2,6 +2,7 @@
 import asyncio
 import random
 from typing import Dict, Any
+from workers.solvers.url_guard import validate_page_url
 
 # Optional: Playwright for browser automation
 try:
@@ -49,7 +50,10 @@ class HcaptchaSolver(BaseSolver):
         
         if not site_key or not page_url:
             raise ValueError("Missing site_key or page_url")
-        
+
+        # SSRF guard before the browser is touched (shared by all URL solvers)
+        await asyncio.to_thread(validate_page_url, page_url)
+
         page = await browser_manager.new_page(stealth=True)
         
         try:

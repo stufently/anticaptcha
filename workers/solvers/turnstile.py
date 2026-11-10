@@ -1,6 +1,7 @@
 """Cloudflare Turnstile solver"""
 import asyncio
 from typing import Dict, Any
+from workers.solvers.url_guard import validate_page_url
 from app.utils.captcha_solver import BaseSolver
 from app.utils.browser import browser_manager
 from app.config import settings
@@ -38,7 +39,10 @@ class TurnstileSolver(BaseSolver):
         
         if not site_key or not page_url:
             raise ValueError("Missing site_key or page_url")
-        
+
+        # SSRF guard before the browser is touched (shared by all URL solvers)
+        await asyncio.to_thread(validate_page_url, page_url)
+
         page = await browser_manager.new_page(stealth=True)
         
         try:

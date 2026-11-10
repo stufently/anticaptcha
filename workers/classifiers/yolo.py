@@ -19,6 +19,33 @@ except ImportError:
     print("⚠️ YOLO not installed. Install with: pip install ultralytics")
 
 
+YOLO_MODEL_PRIORITY = (
+    'recaptcha_custom.pt',  # Custom trained
+    'yolov8s.pt',  # YOLOv8 small
+    'yolov8n.pt',  # YOLOv8 nano
+)
+
+
+def find_yolo_model(models_dir) -> Path:
+    """Return the first existing YOLO checkpoint in models_dir.
+
+    Priority: recaptcha_custom.pt > yolov8s.pt > yolov8n.pt. Raises
+    FileNotFoundError instead of letting ultralytics download weights
+    from the internet at runtime.
+    """
+    models_dir = Path(models_dir)
+    possible_paths = [models_dir / name for name in YOLO_MODEL_PRIORITY]
+    for path in possible_paths:
+        if path.exists():
+            print(f"✅ Found model: {path}")
+            return path
+    raise FileNotFoundError(
+        f"No YOLO model found in {models_dir}. "
+        f"Expected one of: {[str(p) for p in possible_paths]}. "
+        f"Download models or set ANTICAPTCHA_MODELS_DIR correctly."
+    )
+
+
 class YOLOClassifier:
     """
     YOLO-based classifier for CAPTCHA images
@@ -53,30 +80,7 @@ class YOLOClassifier:
             if self.model_path:
                 model_path = Path(self.model_path)
             else:
-                # Auto-detect model in settings.models_dir
-                models_dir = Path(settings.models_dir)
-                
-                # Priority: custom > yolov8s > yolov8n
-                possible_paths = [
-                    models_dir / 'recaptcha_custom.pt',  # Custom trained
-                    models_dir / 'yolov8s.pt',  # YOLOv8 small
-                    models_dir / 'yolov8n.pt',  # YOLOv8 nano
-                ]
-
-                model_path = None
-                for path in possible_paths:
-                    if path.exists():
-                        model_path = path
-                        print(f"✅ Found model: {path}")
-                        break
-
-                if not model_path:
-                    # Loud error instead of silent download
-                    raise FileNotFoundError(
-                        f"No YOLO model found in {models_dir}. "
-                        f"Expected one of: {[str(p) for p in possible_paths]}. "
-                        f"Download models or set ANTICAPTCHA_MODELS_DIR correctly."
-                    )
+                model_path = find_yolo_model(settings.models_dir)
 
             print(f"✅ Loading YOLO model from {model_path}")
             self.model = YOLO(str(model_path))
