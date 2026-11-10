@@ -98,3 +98,94 @@ def test_ocr_timeout_does_not_block_loop_and_does_not_overlap(monkeypatch):
     assert json.loads(t2.result) == {"text": "ABC123"}
     assert reader.max_active == 1  # no concurrent readtext()
     db.close()
+
+
+class HangingReader:
+    """readtext() blocks until `release` is set (a hung OCR)."""
+
+    def __init__(self):
+        self.release = threading.Event()
+        self.calls = 0
+        self.active = 0
+        self.max_active = 0
+        self._guard = threading.Lock()
+
+    def readtext(self, image):
+        with self._guard:
+            self.calls += 1
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            self.release.wait(timeout=30)
+            return [(None, "FREED", 0.9)]
+        finally:
+            with self._guard:
+                self.active -= 1
+
+
+def test_hung_ocr_does_not_exhaust_shared_pool(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from workers.solvers import url_guard
+    from workers.solvers.url_guard import validate_page_url
+
+    monkeypatch.setattr(
+        url_guard.socket, "getaddrinfo",
+        lambda host, port, *a, **k: [(2, 1, 6, "", ("93.184.215.14", port or 0))],
+    )
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(bind=engine)
+    db = sessionmaker(bind=engine)()
+
+    solver = ImageTextSolver()
+    reader = HangingReader()
+    solver.reader = reader
+    monkeypatch.setattr(solver, "_preprocess_image", lambda b: b)
+    w = task_worker.TaskWorker()
+    w.solvers = {"image_text": solver}
+
+    def add():
+        t = Task(api_key_id=1, type="image_text", input_data=json.dumps({"image": "aGVsbG8="}))
+        db.add(t)
+        db.commit()
+        return t
+
+    async def scenario():
+        # Small shared pool makes exhaustion deterministic if OCR used it.
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(2))
+        try:
+            monkeypatch.setattr(task_worker.settings, "task_timeout", 0.3)
+            hung, durations = [], []
+            for _ in range(3):
+                t = add()
+                start = time.monotonic()
+                await w.process_task(db, t)
+                durations.append(time.monotonic() - start)
+                hung.append(t)
+            # shared default executor is still free for url_guard
+            start = time.monotonic()
+            url = await asyncio.wait_for(
+                asyncio.to_thread(validate_page_url, "https://example.com"), timeout=2
+            )
+            guard_time = time.monotonic() - start
+        finally:
+            reader.release.set()
+        monkeypatch.setattr(task_worker.settings, "task_timeout", 10)
+        nxt = add()
+        await w.process_task(db, nxt)
+        return hung, durations, url, guard_time, nxt
+
+    hung, durations, url, guard_time, nxt = asyncio.run(scenario())
+    assert reader.max_active == 1  # checked first: the serialization guarantee
+    for t in hung:
+        db.refresh(t)
+        assert t.status == "failed"
+        assert t.error_message == "Task timed out after 0.3s"
+    assert all(d < 1.3 for d in durations), durations
+    assert url == "https://example.com/"
+    assert guard_time < 0.5
+    db.refresh(nxt)
+    assert nxt.status == "solved"
+    assert json.loads(nxt.result) == {"text": "FREED"}
+    assert reader.max_active == 1  # OCR never overlapped
+    assert reader.calls == 2  # queued jobs of the timed-out tasks never ran
+    db.close()

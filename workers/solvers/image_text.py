@@ -3,7 +3,7 @@ from typing import Dict, Any
 import asyncio
 import base64
 import io
-import threading
+from concurrent.futures import ThreadPoolExecutor
 from app.utils.captcha_solver import BaseSolver
 
 
@@ -13,9 +13,11 @@ class ImageTextSolver(BaseSolver):
     def __init__(self):
         super().__init__()
         self.reader = None
-        # easyocr.Reader is not safe for concurrent calls, and a timed-out
-        # task's thread keeps running: the next OCR must wait for it.
-        self._ocr_lock = threading.Lock()
+        # Own single-thread executor, not the shared default one: easyocr.Reader
+        # is not safe for concurrent calls, so OCR jobs are serialized here, and
+        # a hung OCR only queues image_text jobs instead of exhausting the pool
+        # that other solvers use (asyncio.to_thread for url_guard etc.).
+        self._ocr_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocr")
     
     async def setup(self):
         """Initialize OCR model"""
@@ -39,6 +41,7 @@ class ImageTextSolver(BaseSolver):
     
     async def cleanup(self):
         """Cleanup resources"""
+        self._ocr_executor.shutdown(wait=False, cancel_futures=True)
         self.reader = None
     
     async def solve(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -61,17 +64,17 @@ class ImageTextSolver(BaseSolver):
         if not image_base64:
             raise ValueError("Missing image data")
         
-        # Decode + OCR are synchronous and CPU-heavy: run them in a thread so
-        # the event loop (and the worker's task timeout) keeps working. On
-        # timeout the awaiting coroutine is cancelled and the thread's result
-        # is simply dropped; the task stays failed.
-        return await asyncio.to_thread(self._ocr, image_base64)
+        # Decode + OCR are synchronous and CPU-heavy: run them off the event
+        # loop so the worker's task timeout keeps working. On timeout the
+        # future is cancelled: a job that has not started never runs, a running
+        # one finishes and its result is dropped; the task stays failed.
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._ocr_executor, self._ocr, image_base64)
 
     def _ocr(self, image_base64: str) -> Dict[str, Any]:
         image_bytes = base64.b64decode(image_base64)
         processed_image = self._preprocess_image(image_bytes)
-        with self._ocr_lock:
-            result = self.reader.readtext(processed_image)
+        result = self.reader.readtext(processed_image)
         if result:
             text = ' '.join([r[1] for r in result]).strip()
             return {"text": text}
