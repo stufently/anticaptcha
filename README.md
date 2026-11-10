@@ -26,10 +26,15 @@
 docker build -t anticaptcha .
 
 # Запуск API сервера
-docker run -d -p 8000:8000 -v $(pwd)/data:/app/data anticaptcha
+docker run -d -p 8000:8000 \
+  -v $(pwd)/data:/app/data \
+  -e ANTICAPTCHA_ADMIN_TOKEN=your-secret-token \
+  anticaptcha
 
 # Запуск worker (в отдельном контейнере)
-docker run -d -v $(pwd)/data:/app/data anticaptcha python -m workers.task_worker
+docker run -d -v $(pwd)/data:/app/data \
+  -e ANTICAPTCHA_ADMIN_TOKEN=your-secret-token \
+  anticaptcha python -m workers.task_worker
 ```
 
 ### Локально
@@ -39,11 +44,33 @@ docker run -d -v $(pwd)/data:/app/data anticaptcha python -m workers.task_worker
 python init_db.py
 
 # Запуск API
-uvicorn app.main:app --reload
+ANTICAPTCHA_ADMIN_TOKEN=your-secret-token uvicorn app.main:app --reload
 
 # Запуск worker (в отдельном терминале)
-python run_worker.py
+ANTICAPTCHA_ADMIN_TOKEN=your-secret-token python run_worker.py
 ```
+
+### Создание первого пользователя и API ключа
+
+```bash
+# Создать пользователя через CLI (требует admin token)
+docker exec -it anticaptcha-api python -m app.cli create-user admin password123 --admin
+
+# Создать API ключ для пользователя
+docker exec -it anticaptcha-api python -m app.cli create-key admin
+```
+
+### Миграция базы данных
+
+Если у вас уже есть база данных со старой схемой (без полей `password_salt` и `is_admin`), необходимо:
+
+1. **Для новой базы**: просто запустите `python init_db.py` - схема создастся автоматически
+2. **Для существующей базы**: выполните миграцию вручную:
+   ```sql
+   ALTER TABLE users ADD COLUMN password_salt VARCHAR(32);
+   ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0;
+   ```
+   Или удалите старую базу и создайте новую: `rm data/anticaptcha.db && python init_db.py`
 
 ## API Documentation
 

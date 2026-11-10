@@ -55,14 +55,33 @@ affinity: {}
 
 # Environment variables
 env:
-  - name: DATABASE_URL
-    value: "sqlite+aiosqlite:///./data/anticaptcha.db"
-  - name: LOG_LEVEL
+  - name: ANTICAPTCHA_DATABASE_PATH
+    value: "/app/data/anticaptcha.db"
+  - name: ANTICAPTCHA_MODELS_DIR
+    value: "/app/models"
+  - name: ANTICAPTCHA_LOG_LEVEL
     value: "INFO"
-  - name: WORKERS_COUNT
+  - name: ANTICAPTCHA_WORKERS_COUNT
     value: "4"
+  - name: ANTICAPTCHA_ADMIN_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: anticaptcha-secrets
+        key: admin-token
+        optional: true
 
-# Persistent storage for data and models
+# Worker configuration
+worker:
+  replicas: 1  # Only 1 replica to avoid task conflicts (SQLite)
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+
+# Persistent storage for data only (models are baked into image)
 persistence:
   enabled: true
   storageClass: ""
@@ -70,7 +89,6 @@ persistence:
     - ReadWriteOnce
   size: 10Gi
   dataPath: /app/data
-  modelsPath: /app/models
 
 # Health checks
 livenessProbe:

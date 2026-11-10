@@ -11,18 +11,19 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=sqlite+aiosqlite:///./data/anticaptcha.db
-      - LOG_LEVEL=INFO
-      - WORKERS_COUNT=4
+      - ANTICAPTCHA_DATABASE_PATH=/app/data/anticaptcha.db
+      - ANTICAPTCHA_MODELS_DIR=/app/models
+      - ANTICAPTCHA_LOG_LEVEL=INFO
+      - ANTICAPTCHA_WORKERS_COUNT=4
+      - ANTICAPTCHA_ADMIN_TOKEN=${ANTICAPTCHA_ADMIN_TOKEN:-}
       # Optional: Qwen API key for Vision LLM
       # - QWEN_API_KEY=${QWEN_API_KEY}
     volumes:
       - anticaptcha-data:/app/data
-      - anticaptcha-models:/app/models
       - ./workers:/app/workers:ro
       - ./app:/app/app:ro
       # Optional: Mount qw2 configuration for Vision LLM
-      # - ~/.qwen:/home/deploy/.qwen:ro
+      # - ~/.qwen:/home/anticaptcha/.qwen:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -42,23 +43,26 @@ services:
     image: anticaptcha:latest
     container_name: anticaptcha-worker
     environment:
-      - DATABASE_URL=sqlite+aiosqlite:///./data/anticaptcha.db
-      - LOG_LEVEL=INFO
-      - WORKERS_COUNT=4
+      - ANTICAPTCHA_DATABASE_PATH=/app/data/anticaptcha.db
+      - ANTICAPTCHA_MODELS_DIR=/app/models
+      - ANTICAPTCHA_LOG_LEVEL=INFO
+      - ANTICAPTCHA_WORKERS_COUNT=4
+      - ANTICAPTCHA_ADMIN_TOKEN=${ANTICAPTCHA_ADMIN_TOKEN:-}
       # Optional: Qwen API key for Vision LLM
       # - QWEN_API_KEY=${QWEN_API_KEY}
     volumes:
       - anticaptcha-data:/app/data
-      - anticaptcha-models:/app/models
       - ./workers:/app/workers:ro
       - ./app:/app/app:ro
       # Optional: Mount qw2 configuration for Vision LLM
-      # - ~/.qwen:/home/deploy/.qwen:ro
+      # - ~/.qwen:/home/anticaptcha/.qwen:ro
     restart: unless-stopped
     depends_on:
       - anticaptcha-api
     networks:
       - anticaptcha-network
+    deploy:
+      replicas: 1  # Only 1 replica to avoid task conflicts
     command: python -m workers.task_worker
 
   # Optional: Redis для кэширования

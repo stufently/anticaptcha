@@ -51,14 +51,36 @@ ENV ULTRALYTICS_SAFE_LOAD=1
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN playwright install chromium
 
-# Copy application
-COPY . .
+# Pre-download EasyOCR models (outside /app/data to avoid PVC override)
+ENV EASYOCR_MODULE_PATH=/app/easyocr_models
+RUN mkdir -p /app/easyocr_models && \
+    python -c "import easyocr; easyocr.Reader(['en'], gpu=False, model_storage_directory='/app/easyocr_models')"
 
-# Create data directory
-RUN mkdir -p /app/data
+# Create directories
+RUN mkdir -p /app/data /app/models
+
+# Copy application code (filtered by .dockerignore)
+COPY app/ ./app/
+COPY workers/ ./workers/
+COPY init_db.py run_worker.py ./
+
+# Copy YOLO models if they exist (optional)
+COPY data/yolov8*.pt /app/models/ 2>/dev/null || true
+COPY runs/detect/*/weights/best.pt /app/models/ 2>/dev/null || true
+
+# Create non-root user
+RUN useradd -m -u 1000 -s /bin/bash anticaptcha && \
+    chown -R anticaptcha:anticaptcha /app /ms-playwright /app/easyocr_models
+
+# Switch to non-root user
+USER anticaptcha
 
 # Expose port
 EXPOSE 8000
 
-# Run application
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Default command (can be overridden)
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

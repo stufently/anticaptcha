@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.api_key import User, APIKey
 from app.schemas.user import UserCreate, UserResponse, APIKeyResponse
+from app.config import settings
 import hashlib
 import secrets
 from typing import List, Optional
@@ -26,23 +27,28 @@ def verify_password(password: str, password_hash: str, salt: str) -> bool:
 
 
 def get_current_user(authorization: Optional[str] = Header(None), db: Session = Depends(get_db)) -> User:
-    """Get current user from API key"""
+    """Get current user from API key or admin token"""
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization header required")
     
-    # Extract API key from "Bearer <key>"
+    # Extract token from "Bearer <token>"
     parts = authorization.split()
     if len(parts) != 2 or parts[0].lower() != "bearer":
         raise HTTPException(status_code=401, detail="Invalid authorization format")
     
-    api_key_value = parts[1]
+    token = parts[1]
     
-    # Find API key
-    key_hash = APIKey.hash_key(api_key_value)
+    # Check if it's admin token
+    if settings.admin_token and token == settings.admin_token:
+        # Return a fake admin user for admin token
+        return User(id=0, username="admin", is_admin=True, is_active=True)
+    
+    # Otherwise, it's an API key
+    key_hash = APIKey.hash_key(token)
     api_key = db.query(APIKey).filter(APIKey.key_hash == key_hash, APIKey.is_active == True).first()
     
     if not api_key:
-        raise HTTPException(status_code=401, detail="Invalid API key")
+        raise HTTPException(status_code=401, detail="Invalid API key or admin token")
     
     # Get user
     user = db.query(User).filter(User.id == api_key.user_id, User.is_active == True).first()
@@ -55,9 +61,14 @@ def get_current_user(authorization: Optional[str] = Header(None), db: Session = 
 @router.post("/user", response_model=UserResponse, tags=["auth"])
 def create_user(
     user_data: UserCreate,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Create a new user (first user becomes admin)"""
+    """Create a new user (admin only)"""
+    # Only admin can create users
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Only admins can create users")
+    
     # Check if user exists
     if db.query(User).filter(User.username == user_data.username).first():
         raise HTTPException(status_code=400, detail="Username already exists")
@@ -65,15 +76,12 @@ def create_user(
     # Hash password with salt
     password_hash, salt = hash_password(user_data.password)
 
-    # First user becomes admin
-    is_first_user = db.query(User).count() == 0
-
     # Create user
     user = User(
         username=user_data.username,
         password_hash=password_hash,
         password_salt=salt,
-        is_admin=is_first_user
+        is_admin=False  # New users are not admins by default
     )
 
     db.add(user)

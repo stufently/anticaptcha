@@ -1,0 +1,103 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache
+.coverage
+htmlcov/
+.tox/
+
+# Documentation (keep only essential)
+*.md
+!README.md
+!CHANGELOG.md
+
+# Development files
+*.log
+*.tmp
+*.bak
+*.swp
+
+# Test files (keep only tests/)
+test_*.py
+!tests/
+*_test.py
+
+# Development scripts
+fix_*.py
+update_*.py
+add_*.py
+adjust_*.py
+apply_*.py
+integrate_*.py
+rewrite_*.py
+download_*.py
+train_*.py
+collect_*.py
+
+# Training results
+runs/
+data/synthetic/
+data/processed/
+
+# Images and screenshots
+*.png
+*.jpg
+*.jpeg
+*.gif
+!docs/images/
+
+# Docker
+Dockerfile.minimal
+docker-compose*.yml
+!docker-compose.yml
+
+# Kubernetes
+chart/
+argocd-application.yaml
+
+# Temporary files
+*.html
+*.json
+!package.json
+
+# Qwen workspace
+.qwen/
+.qwen-qw2/
+
+# OS
+.DS_Store
+Thumbs.db

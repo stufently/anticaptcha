@@ -9,6 +9,8 @@ spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
+  strategy:
+    type: Recreate  # Required for RWO volumes
   selector:
     matchLabels:
       {{- include "anticaptcha.selectorLabels" . | nindent 6 }}
@@ -63,17 +65,12 @@ spec:
           volumeMounts:
             - name: data
               mountPath: {{ .Values.persistence.dataPath }}
-            - name: models
-              mountPath: {{ .Values.persistence.modelsPath }}
           {{- end }}
       {{- if .Values.persistence.enabled }}
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "anticaptcha.fullname" . }}-data
-        - name: models
-          persistentVolumeClaim:
-            claimName: {{ include "anticaptcha.fullname" . }}-models
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
@@ -97,6 +94,8 @@ metadata:
     app.kubernetes.io/component: worker
 spec:
   replicas: {{ .Values.worker.replicas | default 1 }}
+  strategy:
+    type: Recreate  # Required for RWO volumes
   selector:
     matchLabels:
       {{- include "anticaptcha.selectorLabels" . | nindent 6 }}
@@ -143,17 +142,12 @@ spec:
           volumeMounts:
             - name: data
               mountPath: {{ .Values.persistence.dataPath }}
-            - name: models
-              mountPath: {{ .Values.persistence.modelsPath }}
           {{- end }}
       {{- if .Values.persistence.enabled }}
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "anticaptcha.fullname" . }}-data
-        - name: models
-          persistentVolumeClaim:
-            claimName: {{ include "anticaptcha.fullname" . }}-models
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
