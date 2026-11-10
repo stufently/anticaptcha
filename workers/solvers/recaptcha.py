@@ -94,7 +94,7 @@ class RecaptchaV2Solver(BaseSolver):
             raise ValueError("Missing site_key or page_url")
 
         # SSRF guard before the browser is touched (shared by all URL solvers)
-        await asyncio.to_thread(validate_page_url, page_url)
+        page_url = await asyncio.to_thread(validate_page_url, page_url)
 
         # Create stealth page
         page = await browser_manager.new_page(stealth=True)
@@ -237,7 +237,7 @@ class RecaptchaV2Solver(BaseSolver):
         # Take screenshot of entire challenge
         try:
             challenge_screenshot = await challenge_frame.locator('.rc-imageselect-target').screenshot()
-        except:
+        except Exception:
             # Fallback: take screenshot of first tile
             challenge_screenshot = await tiles[0].locator('img').screenshot()
 
@@ -403,7 +403,7 @@ class RecaptchaV2Solver(BaseSolver):
                 return True
             
             return False
-        except:
+        except Exception:
             return False
         
     
@@ -445,7 +445,7 @@ class RecaptchaV2Solver(BaseSolver):
                     return True
             
             return False
-        except:
+        except Exception:
             return False
     
     def _detect_bridge(self, img_array: np.ndarray) -> bool:
@@ -459,7 +459,7 @@ class RecaptchaV2Solver(BaseSolver):
             
             # Check for continuous structure
             return np.std(upper) > 30
-        except:
+        except Exception:
             return False
     
     def _detect_mountain(self, img_array: np.ndarray) -> bool:
@@ -470,7 +470,7 @@ class RecaptchaV2Solver(BaseSolver):
             
             # Check variance (mountains have varied terrain)
             return np.std(gray) > 40
-        except:
+        except Exception:
             return False
     
     def _detect_palm_tree(self, img_array: np.ndarray) -> bool:
@@ -485,7 +485,7 @@ class RecaptchaV2Solver(BaseSolver):
                 
                 return green_ratio > 0.2
             return False
-        except:
+        except Exception:
             return False
     
     async def _extract_token(self, page) -> str:
@@ -495,7 +495,7 @@ class RecaptchaV2Solver(BaseSolver):
                 () => document.getElementById('g-recaptcha-response')?.value
             ''')
             return token if token and len(token) > 10 else None
-        except:
+        except Exception:
             return None
 
 
@@ -535,7 +535,7 @@ class RecaptchaV3Solver(BaseSolver):
             raise ValueError("Missing site_key or page_url")
 
         # SSRF guard before the browser is touched (shared by all URL solvers)
-        await asyncio.to_thread(validate_page_url, page_url)
+        page_url = await asyncio.to_thread(validate_page_url, page_url)
 
         page = await browser_manager.new_page()
         
