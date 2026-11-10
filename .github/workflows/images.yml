@@ -1,25 +1,49 @@
-name: Release
+name: Images
 
+# PR            -> build + test, nothing is pushed
+# push to main  -> build + test, push :main and :sha-<short>
+# tag v<semver> -> tag must equal chart appVersion; build + test, push :<version> and :latest
 on:
+  pull_request:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+    tags: ['v*']
+    paths-ignore: ['**.md', 'docs/**', '.claude/**']
+  workflow_dispatch:
+
+concurrency:
+  group: images-${{ github.ref }}
+  # never cancel a release or a main build halfway through a push
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-and-push:
+  image:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    env:
+      PUSH: ${{ github.event_name != 'pull_request' }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Verify tag matches chart appVersion
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          CHART_VERSION=$(grep '^appVersion:' chart/Chart.yaml | awk '{print $2}' | tr -d '"')
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          if [ "$TAG_VERSION" != "$CHART_VERSION" ]; then
+            echo "Tag v$TAG_VERSION does not match chart appVersion $CHART_VERSION" >&2
+            exit 1
+          fi
+
+      # The image is ~7 GB of layers; the runner starts with ~14 GB free.
       - name: Free runner disk space
         run: |
           df -h /
@@ -31,6 +55,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to Container Registry
+        if: env.PUSH == 'true'
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
@@ -42,30 +67,14 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          # Image tag must equal chart appVersion (no "v"): the chart pulls :<appVersion>.
+          # Release tag = chart appVersion without "v": the chart pulls :<appVersion>.
           tags: |
             type=semver,pattern={{version}}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha,prefix=sha-,format=short,enable=${{ github.ref == 'refs/heads/main' }}
 
-      - name: Get chart version
-        id: chart_version
-        run: |
-          CHART_VERSION=$(grep 'appVersion:' chart/Chart.yaml | awk '{print $2}' | tr -d '"')
-          echo "version=$CHART_VERSION" >> $GITHUB_OUTPUT
-          echo "Chart appVersion: $CHART_VERSION"
-
-      - name: Verify tag matches chart version
-        run: |
-          TAG_VERSION=${GITHUB_REF#refs/tags/v}
-          CHART_VERSION=${{ steps.chart_version.outputs.version }}
-          if [ "$TAG_VERSION" != "$CHART_VERSION" ]; then
-            echo "❌ Tag version ($TAG_VERSION) does not match chart appVersion ($CHART_VERSION)"
-            exit 1
-          fi
-          echo "✅ Tag version matches chart version: $TAG_VERSION"
-
-      # One build only: the image is ~7 GB of layers and the runner has ~14 GB
-      # free, two copies (plain docker build + buildx) risk ENOSPC.
+      # One build only: two copies of the layers (plain docker + buildx) risk ENOSPC.
       - name: Build image for test (loaded into local docker)
         uses: docker/build-push-action@v7
         with:
@@ -76,10 +85,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Test image
+      - name: Test image (no network)
         run: docker run --rm --network none -v "$PWD/tests:/app/tests:ro" anticaptcha:test python -m pytest tests -q -p no:cacheprovider
 
       - name: Push image (same builder, layers from cache)
+        if: env.PUSH == 'true'
         uses: docker/build-push-action@v7
         with:
           context: .
