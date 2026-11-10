@@ -85,10 +85,13 @@ class RecaptchaDatasetCollector:
                     await asyncio.sleep(random.uniform(3.0, 5.0))
                     
                     # Check for challenge
+                    # Wait for challenge iframe to appear
+                    await page.wait_for_selector('iframe[src*="bframe"]', timeout=5000)
                     challenge_frame = page.frame_locator('iframe[src*="bframe"]')
-                    
+
                     try:
-                        await challenge_frame.wait_for_selector('.rc-imageselect', timeout=5000)
+                        # Wait for image select challenge content
+                        await challenge_frame.locator('.rc-imageselect').wait_for(timeout=5000)
                         
                         # Get instruction
                         instruction = await challenge_frame.locator('.rc-imageselect-instructions').text_content()

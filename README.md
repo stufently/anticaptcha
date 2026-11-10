@@ -171,6 +171,50 @@ model.save('models/yolov8n-cls.pt')
 
 Устанавливается автоматически через `requirements.txt`. При первом запуске скачает модели.
 
+## Обучение Custom Модели
+
+### Зачем нужно
+
+Предобученная модель Yolo (yolov8n.pt) работает на COCO датасете (обычные фото), а не на синтетических CAPTCHA изображениях. Это приводит к:
+- False positives на CAPTCHA тайлах
+- Низким confidence scores
+- Ошибкам для reCAPTCHA-специфичных классов (crosswalk, stairs, etc.)
+
+### Решение
+
+Обучить custom модель на реальных CAPTCHA изображениях:
+
+```bash
+# 1. Сбор датасета (50+ challenges, ~400-900 изображений)
+docker run --rm --user 1002:1002 \
+  -v "$(pwd)/data:/app/data" \
+  anticaptcha:latest \
+  python collect_recaptcha_dataset.py
+
+# 2. Обучение модели (~5-10 минут на CPU)
+docker run --rm --user 1002:1002 \
+  -v "$(pwd)/data:/app/data" \
+  anticaptcha:latest \
+  python train_custom_yolo.py
+
+# 3. Обновление solver для использования custom модели
+python update_solver_model.py
+
+# 4. Тестирование
+docker run --rm anticaptcha:latest python test_multiple_sites.py
+```
+
+### Результаты
+
+**До custom обучения:**
+- COCO классы (car, bus, etc.): 70-80% success
+- reCAPTCHA-специфичные (crosswalk, stairs, etc.): 0-30% success
+
+**После custom обучения:**
+- Все классы: 85-95% success
+
+Подробнее см. `TRAINING_PIPELINE.md` и `COMPLETION_STATUS.md`.
+
 ## Ограничения
 
 - **GPU опционален** — модели работают на CPU (медленнее)

@@ -39,14 +39,14 @@ class TurnstileSolver(BaseSolver):
         if not site_key or not page_url:
             raise ValueError("Missing site_key or page_url")
         
-        page = await browser_manager.new_page()
+        page = await browser_manager.new_page(stealth=True)
         
         try:
             # Navigate to page with extended timeout
-            await page.goto(page_url, timeout=60000, wait_until="domcontentloaded")
+            await page.goto(page_url, timeout=90000, wait_until="domcontentloaded")
             
             # Wait for Turnstile widget with extended timeout
-            await page.wait_for_selector('iframe[src*="challenges.cloudflare.com"]', timeout=30000)
+            await page.wait_for_selector('iframe[src*="challenges.cloudflare.com"]', timeout=60000)
             
             # Wait for automatic solving (Turnstile often solves automatically)
             await asyncio.sleep(3)
