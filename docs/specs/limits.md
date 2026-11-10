@@ -115,8 +115,9 @@
   tables the winner committed.
 - **`init_db()` retries the lock:** `busy_timeout` bounds ONE attempt, and a
   migration in the other process can outlast it - the loser then died on
-  `database is locked` and the API or the worker did not start (reproduced:
-  5.06 s). `init_db(lock_wait_seconds=60.0)` therefore repeats `_init_db_once()`
+  `database is locked` and the API or the worker did not start (5.06 s in the
+  M2b review, 5.01 s measured again on `BEGIN IMMEDIATE` against a held write
+  lock). `init_db(lock_wait_seconds=60.0)` therefore repeats `_init_db_once()`
   every 0.5 s while the error contains `locked` and the budget is not up; any
   other `OperationalError` (a damaged file, a read-only volume) is raised at once.
 - The chart sets none of these values — the code defaults above apply.
@@ -128,14 +129,15 @@ migrated once, by `reclaim_space()` in `workers/cleanup.py`. That one-time
 
 - **It holds the write lock for the whole rebuild.** SQLite copies every live
   page into a temporary database and then replaces the file, so the `VACUUM` is
-  one exclusive operation - `AUTOCOMMIT` on the SQLAlchemy side only means no
-  transaction is wrapped around it. While it runs, another process that wants to
-  write waits `busy_timeout` and then fails: `POST /api/v1/task` takes
-  `BEGIN IMMEDIATE` to count the quota and ends with `database is locked`
-  (measured 5.01 s against a held write lock), i.e. an HTTP 500, and the worker
-  cannot commit either. On a small database this is a fraction of a second;
-  measured on NVMe for 1 GB of live data: 4.8 s. It happens once per database, at
-  the first cleanup round after the upgrade.
+  one exclusive operation - `AUTOCOMMIT` on the SQLAlchemy side only means that no
+  transaction is wrapped around it. While it runs, any other process that wants
+  to write waits `busy_timeout` and then fails. Measured in the acceptance image
+  against another process holding `BEGIN IMMEDIATE`: `POST /api/v1/task`, which
+  takes the same lock to count the quota, answers **HTTP 500 after 5.01 s**, and
+  the worker cannot commit either. On a small database the lock is held for a
+  fraction of a second; measured on NVMe for 1 GB of live data: 4.8 s. The
+  migration happens once per database, at the first cleanup round after the
+  upgrade.
 - **It needs free space for a second copy of the database.**
   `_has_room_for_vacuum()` compares `shutil.disk_usage(<database directory>).free`
   with `2 * <database file size>` and, when the volume is too small, skips the
