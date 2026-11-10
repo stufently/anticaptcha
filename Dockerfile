@@ -60,14 +60,17 @@ RUN playwright install chromium
 # EASYOCR_MODULE_PATH, the same way the runtime Reader does (download disabled
 # there). The check fails the build if the layout ever diverges.
 ENV EASYOCR_MODULE_PATH=/app/easyocr_models
-RUN python -c "import easyocr; easyocr.Reader(['en'], gpu=False)" && \
-    python -c "import easyocr; easyocr.Reader(['en'], gpu=False, download_enabled=False)" && \
+RUN python -c "import easyocr; easyocr.Reader(['en'], gpu=False, quantize=False)" && \
+    python -c "import easyocr; easyocr.Reader(['en'], gpu=False, download_enabled=False, quantize=False)" && \
     test -f "$EASYOCR_MODULE_PATH/model/craft_mlt_25k.pth" && \
     test -f "$EASYOCR_MODULE_PATH/model/english_g2.pth" && \
     test -d "$EASYOCR_MODULE_PATH/user_network"
 
 # Create directories
-RUN mkdir -p /app/data /app/models /home/anticaptcha/.qwen
+# Ultralytics settings base dir (it appends "Ultralytics/" itself); without a
+# writable one it warns and falls back to /tmp
+ENV YOLO_CONFIG_DIR=/home/anticaptcha/.config
+RUN mkdir -p /app/data /app/models /home/anticaptcha/.qwen "$YOLO_CONFIG_DIR"
 
 # Download YOLO models from official releases, verified by SHA256
 RUN wget -q https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt -O /app/models/yolov8n.pt && \

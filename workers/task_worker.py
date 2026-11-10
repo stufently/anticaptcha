@@ -27,6 +27,9 @@ SOLVERS = {
 }
 
 
+RESTART_ERROR = "worker restarted while processing the task"
+
+
 class TaskWorker:
     """Process CAPTCHA solving tasks"""
     
@@ -138,9 +141,26 @@ class TaskWorker:
         
         db.commit()
     
+    def recover_interrupted_tasks(self) -> int:
+        """Fail tasks left in `processing` by a previous worker that died
+        mid-task (crash, OOM, SIGILL). Not back to pending: a task that kills
+        the worker would otherwise crash-loop it forever."""
+        db = SessionLocal()
+        try:
+            stuck = db.query(Task).filter(Task.status == "processing").all()
+            for task in stuck:
+                task.status = "failed"
+                task.error_message = RESTART_ERROR
+                print(f"❌ Task {task.id} failed: {RESTART_ERROR}", flush=True)
+            db.commit()
+            return len(stuck)
+        finally:
+            db.close()
+
     async def run(self):
         """Main worker loop"""
         print("🚀 Task worker started")
+        self.recover_interrupted_tasks()
         
         # Setup solvers
         await self.setup_solvers()
