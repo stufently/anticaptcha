@@ -14,6 +14,8 @@ import pathlib
 import signal
 import time
 
+import pytest
+
 from workers.classifiers.vision_llm import _reap
 
 WAIT_SECONDS = 5.0
@@ -39,6 +41,15 @@ def is_gone(pid):
     except ProcessLookupError:
         return True
     return proc_state(pid) == "Z"
+
+
+def group_is_empty(pgid):
+    """Signal 0 checks only: no process, not even a zombie, is left in the group."""
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return True
+    return False
 
 
 def read_pid(path):
@@ -134,6 +145,11 @@ def test_R1_reap_on_empty_group_raises_nothing(tmp_path):
                 f"(state={proc_state(descendant)})"
             )
             cleanup_descendant(pid_file)
+            if not group_is_empty(process.pid):
+                pytest.skip(
+                    f"group {process.pid} is not empty: the dead descendant is "
+                    "still a zombie because PID 1 here does not reap orphans"
+                )
 
             await _reap(process)
         finally:

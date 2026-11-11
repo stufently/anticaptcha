@@ -62,10 +62,12 @@ async def _reap(process) -> None:
     # Kill the group also when asyncio has already reaped the leader: the CLI
     # exits before the descendant that inherited its stdout/stderr, and that
     # descendant is precisely what has to die. The leader's PID is the group
-    # ID, and Linux does not hand a PID to a new process while any live
-    # process still uses it as PGID/SID. So while the group holds a process
-    # the number is still ours, and once the group is empty `killpg` only
-    # raises ProcessLookupError, which is caught below.
+    # ID, and Linux does not hand a PID to a new process while any process
+    # still uses it as PGID/SID, so while the group holds a process the number
+    # is ours. Once the group is empty and reaped the number is free again:
+    # usually `killpg` then raises ProcessLookupError (caught below), but if
+    # PID allocation wrapped past `pid_max` in that gap and a new group leader
+    # got the number, SIGKILL would hit that group. Tiny window, but not zero.
     if isinstance(pid, int) and pid > 0:
         try:
             os.killpg(pid, signal.SIGKILL)
