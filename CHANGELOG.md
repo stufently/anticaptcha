@@ -28,6 +28,44 @@
   `SOLVERS`, `setup()`/`solve()`/`cleanup()`), `page_url="https://example.com/"`,
   `render_mode="widget"`. Замер в образе `anticaptcha:m2-accept`: 6 passed за
   50,9 с (E1 2,4 с; E2 30,5 с; E3 8,9 с; E4 1,2 с; E5 5,5 с; E6 0,4 с).
+- reCAPTCHA v2 (`RecaptchaV2Solver` в `workers/solvers/recaptcha.py`) решает
+  картиночный челлендж раундами: `_solve_rounds` повторяет «прочитать челлендж
+  → выбрать плитки → нажать `#recaptcha-verify-button`» до токена, не больше
+  `MAX_ROUNDS = 5` раундов. `_wait_round_outcome` после verify до 10 с
+  различает три исхода: `token` (непустой `#g-recaptcha-response`), `retry`
+  (виден `.rc-imageselect-error-select-more`,
+  `.rc-imageselect-error-dynamic-more` или `.rc-imageselect-incorrect-response`,
+  либо Google подменил инструкцию/сетку) и `timeout`. Нет исхода —
+  `RuntimeError("reCAPTCHA v2: no outcome after verify")`, раунды кончились —
+  `RuntimeError("reCAPTCHA v2: challenge not solved in 5 rounds")`.
+- `_read_challenge` читает челлендж со страницы: цель — текст `<strong>` внутри
+  `.rc-imageselect-desc-wrapper` / `.rc-imageselect-instructions` (нет
+  `<strong>` — целью считается вся инструкция), сетка — по числу
+  `.rc-image-tile-wrapper` (9 → `3x3`, 16 → `4x4`), признак динамической сетки —
+  по `none left` в инструкции. Все помощники челленджа принимают «корень»,
+  объект с методом `.locator()`: в бою это
+  `page.frame_locator('iframe[src*="bframe"]')`, в тестах — страница с поддельным
+  DOM bframe.
+- Динамическая сетка («Click verify once there are none left»):
+  `_clear_dynamic_grid` кликает выбранные плитки, ждёт замены (1,5–2,0 с) и
+  выбирает заново, пока выбор не пустеет, — не больше `MAX_DYNAMIC_PASSES = 5`
+  проходов; затем verify.
+- `recaptcha_v2` принимает `render_mode` через общий `check_browser_input` и в
+  режиме `widget` отдаёт свою страницу виджета (`install_widget_page(page,
+  page_url, "recaptcha_v2", site_key)`) — шаблон, добавленный в M3a, теперь
+  используется.
+- `tests/test_m3b_unit.py` — 6 тестов (B1–B6) без сети, на поддельном DOM bframe
+  в Chromium из образа: кроп плитки из спрайта, два раунда, `error-select-more`,
+  динамическая сетка, исчерпание раундов, чтение цели и сетки 4x4.
+  Классификатор — заглушка, ключа vision LLM в образе нет. Замер в
+  `anticaptcha:m2-accept`: 6 passed за 13,95 с (B4 5,78 с; B2 2,01 с; B5 1,53 с;
+  B3 1,32 с; B1 1,02 с; B6 0,46 с). Полный сьют без сети: 276 passed, 7 skipped
+  за 46,9 с (на BASE `209578b` — 270 passed, 6 skipped за 35,6 с).
+- `tests/test_m3b_e2e.py` — 1 тест (E7), только при `ANTICAPTCHA_E2E=1`:
+  тестовый ключ Google, `page_url="https://example.com/"`, `render_mode="widget"`
+  → токен не короче 100 символов. Замер: токен 1636 символов за 4,8 с. Раунды
+  челленджа в e2e не проверяются: для них нужен ключ vision LLM, а на тестовом
+  ключе Google челлендж не выдаётся.
 
 ### Fixed
 - Turnstile (`workers/solvers/turnstile.py`): iframe виджета теперь в закрытом
@@ -95,6 +133,34 @@
 - `tests/test_m2d_reap.py` — 2 теста (R1) на настоящем поддереве процессов:
   группа убивается после сборки лидера; `_reap` на пустой группе не бросает
   исключений.
+- reCAPTCHA v2 (`RecaptchaV2Solver`): «плиткой» считался весь спрайт.
+  `.rc-image-tile-wrapper` — это окно 126x126 с `overflow:hidden`, внутри
+  которого `img.rc-image-tile-33` 378x378 — вся сетка, сдвинутая отрицательными
+  `left`/`top`. Скриншот `img` отдавал классификатору девять одинаковых
+  картинок всей сетки, объект находился «везде», и кликались все 9 плиток.
+  `_grab_tile_shots` снимает саму обёртку. Замер на поддельном DOM (спрайт
+  378x378 из 9 сплошных цветов, по одному на плитку): 9 снимков 126x126, средний
+  цвет каждого равен цвету своей плитки, все 9 различимы; скриншот `img` на том
+  же DOM — 378x378 (`test_B1_crop`).
+- reCAPTCHA v2: челлендж решался одним проходом — после verify токен
+  проверялся один раз через фиксированные 3 с, а повторные раунды и баннеры
+  `.rc-imageselect-error-*` не обрабатывались. Теперь раунды повторяются до
+  токена (см. Added), а ожидание исхода ограничено 10 с на раунд.
+- reCAPTCHA v2: фиксированные `sleep(2–4)` перед поиском виджета, `sleep(3–5)`
+  после клика по чекбоксу и `sleep(3)` после verify заменены опросом
+  `#g-recaptcha-response` каждые 0,25 с — до 6 с после чекбокса (`_poll_token`).
+- reCAPTCHA v2: неизвестная цель челленджа обрывала задачу до первого клика —
+  `_extract_target` искал в инструкции одно из 15 зашитых слов, на остальных
+  возвращал `None`, и `solve` бросал `ValueError(f"Unknown challenge: …")`.
+  Цель теперь читается из `<strong>` инструкции, а при его отсутствии — из всего
+  текста.
+- reCAPTCHA v2: чекбокс искался по `iframe[title*="reCAPTCHA"]` (`title` Google
+  локализует), а ожидание виджета — по `iframe[src*="recaptcha"]`, который
+  матчит и anchor-, и bframe-фрейм. Селекторы закреплены константами
+  `CHECKBOX_FRAME = 'iframe[src*="anchor"]'` и
+  `CHALLENGE_FRAME = 'iframe[src*="bframe"]'`; ожидание и клик ограничены 20 с и
+  10 с. Замер: тестовый ключ Google в режиме `widget` на `https://example.com/`
+  → токен 1636 символов за 4,8 с (`test_E7_v2_testkey`).
 
 ### Removed
 - Мёртвый код с устаревшим User-Agent `Chrome/120`: метод
@@ -103,6 +169,13 @@
   `workers`, ни в `tests` (grep). Импорт `BrowserContext` оставлен: аннотация
   `self._context: Optional[BrowserContext]` у атрибута вычисляется в рантайме,
   без импорта `BrowserManager.__init__` падал бы с `NameError`.
+- `RecaptchaV2Solver`: `_extract_target` (список из 15 слов),
+  `_solve_with_vision_llm` и `_solve_image_challenge_hybrid` (один проход по
+  сетке, скриншот `img` вместо плитки), `_extract_token` (отбрасывал токен
+  короче 10 символов). Заменены на `_read_challenge`, `_pick` /
+  `_pick_with_yolo`, `_grab_tile_shots` и `_read_token`. Тестов, зовущих
+  удалённые методы, в `tests/` не было (grep по `_extract_target`,
+  `_solve_with_vision_llm`, `_solve_image_challenge_hybrid`, `_extract_token`).
 
 ### Security
 - Лог воркера больше не печатает токен задачи: строка «solved» выводит
@@ -111,6 +184,12 @@
   `task.result` сохраняет настоящий токен — клиент его получает. Замер: токен из
   40 символов в stdout отсутствует, на его месте `<40 chars>`
   (`tests/test_m3a_unit.py`).
+- `RecaptchaV2Solver` больше не печатает часть токена: строка
+  `Challenge solved! Token: {token[:50]}...` раскрывала первые 50 символов в
+  логе воркера — по ним токен не подделать, но лог уходит в мониторинг и в
+  отчёты. Теперь печатается только длина. Замер e2e на тестовом ключе Google: в
+  stdout одна строка `token without a challenge (1636 chars)`, самого токена
+  (1636 символов) в выводе нет.
 
 ## [1.1.0] - 2026-11-10
 

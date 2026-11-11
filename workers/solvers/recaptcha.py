@@ -2,7 +2,7 @@
 import asyncio
 import random
 import time
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pathlib import Path
 
 # Optional: Playwright for browser automation
@@ -46,8 +46,55 @@ except ImportError:
     YOLO = None
 
 
+# --- reCAPTCHA v2 ---------------------------------------------------------
+# The widget is split over two iframes: the checkbox lives in the "anchor"
+# frame, the image challenge in the "bframe" one. Both are matched by URL
+# because Google localises the title attribute.
+CHECKBOX_FRAME = 'iframe[src*="anchor"]'
+CHALLENGE_FRAME = 'iframe[src*="bframe"]'
+CHECKBOX_ELEMENT = "#recaptcha-anchor"
+VERIFY_BUTTON = "#recaptcha-verify-button"
+TILE_WRAPPER = ".rc-image-tile-wrapper"
+CHALLENGE_TARGET = ".rc-imageselect-target"
+# The instruction sits in one of two containers depending on the challenge
+# layout; the thing to select is the word Google emphasizes with <strong>.
+CHALLENGE_DESC = ".rc-imageselect-desc-wrapper, .rc-imageselect-instructions"
+CHALLENGE_STRONG = ".rc-imageselect-desc-wrapper strong, .rc-imageselect-instructions strong"
+# A rejected round announces itself with one of these banners instead of a token.
+CHALLENGE_ERRORS = (
+    ".rc-imageselect-error-select-more",
+    ".rc-imageselect-error-dynamic-more",
+    ".rc-imageselect-incorrect-response",
+)
+# "Click verify once there are none left" marks a grid that refills itself.
+DYNAMIC_MARKER = "none left"
+
+TOKEN_JS = """() => {
+    const el = document.getElementById('g-recaptcha-response');
+    return el && el.value ? el.value : null;
+}"""
+
+FRAME_TIMEOUT_MS = 20000
+CLICK_TIMEOUT_MS = 10000
+CHECKBOX_TOKEN_TIMEOUT = 6   # seconds to poll for a token after the checkbox click
+TOKEN_POLL_INTERVAL = 0.25
+
+MAX_ROUNDS = 5
+MAX_DYNAMIC_PASSES = 5
+
+
 class RecaptchaV2Solver(BaseSolver):
-    """Solve reCAPTCHA v2 with stealth and hybrid classification"""
+    """Solve reCAPTCHA v2: checkbox first, then the image challenge in rounds.
+
+    Google answers a datacenter IP with an image challenge almost always, and a
+    challenge is rarely over after one verify: it comes back with a new grid, a
+    "select more" banner, or tiles that refill as they are clicked. So the
+    challenge is read and answered in a bounded loop of rounds.
+
+    Every challenge helper takes a `root` — anything with a `.locator()` method:
+    in production `page.frame_locator('iframe[src*="bframe"]')`, in the unit
+    tests the page itself carrying a fake bframe DOM.
+    """
     
     def __init__(self):
         super().__init__()
@@ -78,218 +125,230 @@ class RecaptchaV2Solver(BaseSolver):
     
     async def solve(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Solve reCAPTCHA v2 with stealth
-        
+        Solve reCAPTCHA v2
+
         Args:
             input_data: {
                 "site_key": "6Le...",
-                "page_url": "https://example.com"
+                "page_url": "https://example.com",
+                "render_mode": "page" | "widget"  # optional, default "page"
             }
-        
+
         Returns:
             {"token": "..."}
         """
-        site_key = input_data.get("site_key")
-        page_url = input_data.get("page_url")
-        
-        if not site_key or not page_url:
-            raise ValueError("Missing site_key or page_url")
+        site_key, page_url, render_mode = check_browser_input(input_data)
 
         # SSRF guard before the browser is touched (shared by all URL solvers)
         page_url = await asyncio.to_thread(validate_page_url, page_url)
 
-        # Create stealth page
         page = await browser_manager.new_page(stealth=True)
-        
+
         try:
-            # Navigate
-            print(f"🌐 Navigating to {page_url}")
-            await page.goto(page_url, timeout=settings.browser_timeout * 1000, wait_until='domcontentloaded')
-            await asyncio.sleep(random.uniform(2.0, 4.0))
-            
-            # Find reCAPTCHA iframe
-            print("🔍 Finding reCAPTCHA widget...")
-            await page.wait_for_selector('iframe[src*="recaptcha"]', timeout=15000)
-            
-            # Click checkbox
-            print("✅ Clicking checkbox...")
-            checkbox_frame = page.frame_locator('iframe[title*="reCAPTCHA"]')
-            await checkbox_frame.locator('#recaptcha-anchor').click()
-            await asyncio.sleep(random.uniform(3.0, 5.0))
-            
-            # Check for token
-            token = await self._extract_token(page)
-            
+            if render_mode == "widget":
+                # The client's page may be closed to this IP by a WAF (the public
+                # demo pages answer 403 to datacenters) while Google's own
+                # scripts stay reachable: serve the widget ourselves.
+                await install_widget_page(page, page_url, "recaptcha_v2", site_key)
+
+            print(f"🌐 reCAPTCHA v2: navigating to {page_url}")
+            await page.goto(
+                page_url,
+                timeout=settings.browser_timeout * 1000,
+                wait_until="domcontentloaded",
+            )
+
+            await page.wait_for_selector(CHECKBOX_FRAME, timeout=FRAME_TIMEOUT_MS)
+            await page.frame_locator(CHECKBOX_FRAME).locator(CHECKBOX_ELEMENT).click(
+                timeout=CLICK_TIMEOUT_MS
+            )
+            print("🖱️ reCAPTCHA v2: checkbox clicked, polling for the token")
+
+            token = await self._poll_token(page, CHECKBOX_TOKEN_TIMEOUT)
             if token:
-                print(f"✅ Token received!")
+                # Google let the click through without a challenge. The log gets
+                # the length only, never the token itself.
+                print(f"✅ reCAPTCHA v2: token without a challenge ({len(token)} chars)")
                 return {"token": token}
-            
-            # Check for image challenge
-            print("⚠️ Image challenge detected, solving...")
-            challenge_frame = page.frame_locator('iframe[src*="bframe"]')
-            
-            # Get challenge instruction
-            instruction = await challenge_frame.locator('.rc-imageselect-instructions').text_content()
-            print(f"📋 Challenge: {instruction[:60]}")
-            
-            # Extract target keyword
-            target = self._extract_target(instruction)
-            if not target:
-                raise ValueError(f"Unknown challenge: {instruction}")
-            
-            print(f"🎯 Target: {target}")
-            
-            # Solve image challenge with hybrid approach
-            if self.yolo_model or HAS_ML:
-                result = await self._solve_with_vision_llm(page, challenge_frame, target)  # Use Vision LLM instead of YOLO
-                
-                if result:
-                    # Check for token
-                    await asyncio.sleep(3)
-                    token = await self._extract_token(page)
-                    
-                    if token:
-                        print(f"✅ Challenge solved! Token: {token[:50]}...")
-                        return {"token": token}
-            
-            raise RuntimeError("Could not solve image challenge")
-        
+
+            await page.wait_for_selector(CHALLENGE_FRAME, timeout=FRAME_TIMEOUT_MS)
+            print("⚠️ reCAPTCHA v2: image challenge detected, solving in rounds")
+            token = await self._solve_rounds(page, page.frame_locator(CHALLENGE_FRAME))
+            return {"token": token}
+
         finally:
             await page.close()
-    
-    def _extract_target(self, instruction: str) -> str:
-        """Extract target keyword from instruction"""
-        instruction_lower = instruction.lower()
-        keywords = [
-            'car', 'bus', 'truck', 'bicycle', 'motorcycle',
-            'traffic light', 'crosswalk', 'fire hydrant',
-            'stairs', 'bridge', 'mountain', 'palm tree', 'chimney',
-            'pedestrian', 'taxis'
-        ]
-        
-        for keyword in keywords:
-            if keyword in instruction_lower:
-                # Normalize
-                if keyword == 'traffic light':
-                    return 'traffic_light'
-                elif keyword == 'fire hydrant':
-                    return 'fire_hydrant'
-                elif keyword == 'palm tree':
-                    return 'palm_tree'
-                return keyword
-        
-        return None
-    
-    async def _solve_image_challenge_hybrid(self, page, challenge_frame, target: str) -> bool:
-        """Solve using hybrid Yolo + heuristics approach"""
-        print(f"🤖 Solving challenge (hybrid) for: {target}")
-        
-        # Get all image tiles
-        tiles = await challenge_frame.locator('.rc-image-tile-wrapper').all()
-        print(f"📸 Found {len(tiles)} images")
-        
-        # Classify each image
-        selected = []
-        for i, tile in enumerate(tiles):
-            img = tile.locator('img')
-            
-            # Take screenshot
-            screenshot = await img.screenshot()
-            
-            # Classify with hybrid approach
-            should_select = await self._classify_image_hybrid(screenshot, target)
-            
-            if should_select:
-                print(f"   Image {i+1}: ✅ SELECT")
-                await tile.click()
-                selected.append(i)
-                await asyncio.sleep(random.uniform(0.5, 1.0))
-            else:
-                print(f"   Image {i+1}: ❌ Skip")
-        
-        print(f"✅ Selected {len(selected)} images")
-        
-        if selected:
-            # Click verify
-            verify_button = challenge_frame.locator('#recaptcha-verify-button')
-            await verify_button.click()
-            return True
-        
-        return False
-    
-    async def _solve_with_vision_llm(self, page, challenge_frame, target: str) -> bool:
-        """
-        Решает CAPTCHA с помощью одного вызова Vision LLM
 
-        Подход конкурентов:
-        1. Сделать screenshot всей CAPTCHA сетки
-        2. Отправить в Vision LLM с инструкцией
-        3. Получить индексы плиток для клика
-        4. Кликнуть по этим плиткам
+    async def _poll_token(self, page, timeout: float) -> Optional[str]:
+        """Poll `#g-recaptcha-response` for up to `timeout` seconds."""
+        deadline = time.monotonic() + timeout
 
-        Быстрее и точнее, чем YOLO!
-        """
-        print(f"🤖 Solving challenge with Vision LLM for: {target}")
+        while True:
+            token = await self._read_token(page)
+            if token:
+                return token
+            if time.monotonic() >= deadline:
+                return None
+            await asyncio.sleep(TOKEN_POLL_INTERVAL)
 
-        # Get challenge info
-        tiles = await challenge_frame.locator('.rc-image-tile-wrapper').all()
-        grid_size = len(tiles)
-        print(f"📸 Found {grid_size} images")
-
-        # Take screenshot of entire challenge
+    async def _read_token(self, page) -> Optional[str]:
+        """One token read off the page; None when there is no token yet."""
         try:
-            challenge_screenshot = await challenge_frame.locator('.rc-imageselect-target').screenshot()
+            return await page.evaluate(TOKEN_JS) or None
         except Exception:
-            # Fallback: take screenshot of first tile
-            challenge_screenshot = await tiles[0].locator('img').screenshot()
+            return None
 
-        # Call vision LLM for classification
-        if self.vision_classifier:
-            try:
-                grid_type = "3x3" if grid_size == 9 else "4x4" if grid_size == 16 else "2x3"
-                instruction = f"Select all tiles with {target.replace('_', ' ')}"
+    async def _solve_rounds(self, page, root) -> str:
+        """Answer the challenge round after round until Google issues a token.
 
-                indices = await self.vision_classifier.classify_tiles(
-                    challenge_screenshot,
-                    instruction,
-                    grid_type
+        One verify is rarely enough: Google answers a wrong or too small
+        selection with an error banner and a fresh grid. Each round re-reads the
+        challenge, because the target and the grid size can both change.
+        """
+        for round_no in range(MAX_ROUNDS):
+            ch = await self._read_challenge(root)
+            print(
+                f"🎯 reCAPTCHA v2 round {round_no + 1}/{MAX_ROUNDS}: "
+                f"target={ch['target']!r} grid={ch['grid']} dynamic={ch['dynamic']}"
+            )
+
+            if ch["dynamic"]:
+                await self._clear_dynamic_grid(root, ch)
+            else:
+                for idx in await self._pick(root, ch):
+                    await self._click_tile(root, idx)
+
+            await root.locator(VERIFY_BUTTON).click(timeout=CLICK_TIMEOUT_MS)
+            outcome = await self._wait_round_outcome(page, root, timeout=10, before=ch)
+
+            if outcome == "token":
+                token = await self._read_token(page)
+                print(
+                    f"✅ reCAPTCHA v2: token after round {round_no + 1} "
+                    f"({len(token)} chars)"
                 )
+                return token
+            if outcome == "timeout":
+                raise RuntimeError("reCAPTCHA v2: no outcome after verify")
+            print(f"🔁 reCAPTCHA v2: round {round_no + 1} rejected, trying again")
 
-                print(f"🎯 Vision LLM selected {len(indices)} tiles: {indices}")
+        raise RuntimeError("reCAPTCHA v2: challenge not solved in 5 rounds")
 
-                # Check if classification was successful
-                # (Claude's finding #3 - don't click verify on empty/error)
-                if not indices and len(indices) == 0:
-                    # Check if this is an error or legitimate "no tiles match"
-                    # For now, assume it's legitimate and continue
-                    print(f"   No matching tiles found (this may be correct)")
+    async def _wait_round_outcome(self, page, root, timeout=10, before=None) -> str:
+        """What verify produced: "token", "retry" or "timeout".
 
-                # Click selected tiles
-                for idx in indices:
-                    if 0 <= idx < len(tiles):
-                        print(f"   Clicking tile {idx}")
-                        await tiles[idx].click()
-                        await asyncio.sleep(random.uniform(0.3, 0.7))
+        "retry" covers both ways Google asks again — an error banner, and a
+        silently replaced challenge. `before` is the challenge as read at the
+        start of the round; without it a replacement right after the click would
+        sit out the whole timeout looking like a challenge nobody answered.
+        """
+        deadline = time.monotonic() + timeout
 
-                # Click verify button
-                verify_button = challenge_frame.locator('#recaptcha-verify-button')
-                await verify_button.click()
+        while True:
+            if await self._read_token(page):
+                return "token"
+            for selector in CHALLENGE_ERRORS:
+                if await self._visible(root, selector):
+                    return "retry"
+            if before is not None and await self._read_challenge(root) != before:
+                return "retry"
+            if time.monotonic() >= deadline:
+                return "timeout"
+            await asyncio.sleep(TOKEN_POLL_INTERVAL)
 
-                return True
+    async def _read_challenge(self, root) -> dict:
+        """What the grid on screen asks for right now.
 
-            except RuntimeError as e:
-                # Vision LLM failed - DON'T click verify with empty selection
-                print(f"⚠️ Vision LLM failed: {e}")
-                print(f"   Falling back to YOLO...")
-                # Fall back to YOLO
-                return await self._solve_image_challenge_hybrid(page, challenge_frame, target)
-            except Exception as e:
-                print(f"⚠️ Vision LLM unexpected error: {e}")
-                # Fall back to YOLO
-                return await self._solve_image_challenge_hybrid(page, challenge_frame, target)
-        else:
-            print("⚠️ Vision classifier not initialized, using YOLO")
-            return await self._solve_image_challenge_hybrid(page, challenge_frame, target)
+        The target is the emphasized word of the instruction; a layout without
+        <strong> leaves the whole instruction as the target, because guessing it
+        out of a fixed word list is what made unknown challenges unsolvable.
+        """
+        instruction = await self._text(root, CHALLENGE_DESC)
+        target = await self._text(root, CHALLENGE_STRONG) or instruction
+        tiles = await root.locator(TILE_WRAPPER).count()
+        return {
+            "target": target,
+            "instruction": instruction,
+            "grid": "4x4" if tiles == 16 else "3x3",
+            "dynamic": DYNAMIC_MARKER in instruction.lower(),
+        }
+
+    async def _text(self, root, selector: str) -> str:
+        """Whitespace-normalized text of the first match; "" when there is none."""
+        locator = root.locator(selector).first
+        if not await locator.count():
+            return ""
+        return " ".join(((await locator.text_content()) or "").split())
+
+    async def _visible(self, root, selector: str) -> bool:
+        try:
+            return await root.locator(selector).first.is_visible()
+        except Exception:
+            return False
+
+    async def _grab_tile_shots(self, root) -> list[bytes]:
+        """One screenshot per tile, cropped to that tile.
+
+        The wrapper, not its `img`: reCAPTCHA serves the whole grid as a single
+        sprite (378x378 for 3x3) shifted inside a 126x126 window, so an `img`
+        screenshot hands every tile to the classifier as the complete grid.
+        """
+        shots = []
+        for tile in await root.locator(TILE_WRAPPER).all():
+            shot = await tile.screenshot()
+            shots.append(shot)
+        return shots
+
+    async def _pick(self, root, ch) -> list[int]:
+        """Tile indices to click: the vision LLM first, YOLO on the crops if it fails."""
+        tiles = await root.locator(TILE_WRAPPER).count()
+        try:
+            shot = await root.locator(CHALLENGE_TARGET).screenshot()
+            picked = await self.vision_classifier.classify_tiles(
+                shot, f"Select all {ch['target']}", ch["grid"]
+            )
+        except Exception as exc:
+            # No API key, a dead endpoint or a missing target element all land
+            # here; the per-tile crops still allow the local classifier to try.
+            print(
+                f"⚠️ reCAPTCHA v2: vision LLM unavailable ({type(exc).__name__}), "
+                f"falling back to YOLO"
+            )
+            picked = await self._pick_with_yolo(root, ch)
+        # A hallucinated index would raise deep inside Playwright's nth()
+        return [idx for idx in picked if 0 <= idx < tiles]
+
+    async def _pick_with_yolo(self, root, ch) -> list[int]:
+        """Local fallback: classify each cropped tile on its own."""
+        # `_classify_image_hybrid` speaks underscore names, the page does not
+        target = ch["target"].lower().replace(" ", "_")
+        picked = []
+        for idx, shot in enumerate(await self._grab_tile_shots(root)):
+            if await self._classify_image_hybrid(shot, target):
+                picked.append(idx)
+        return picked
+
+    async def _clear_dynamic_grid(self, root, ch) -> None:
+        """Click a refilling grid until it has nothing left to select.
+
+        "Click verify once there are none left": every clicked tile comes back
+        as a new one, so passes repeat until the classifier stops finding
+        matches — bounded, because a classifier that keeps guessing would
+        otherwise click forever.
+        """
+        for _ in range(MAX_DYNAMIC_PASSES):
+            picked = await self._pick(root, ch)
+            if not picked:
+                return
+            for idx in picked:
+                await self._click_tile(root, idx)
+            # Google swaps the clicked tiles server-side; clicking the next
+            # batch before the swap lands selects tiles that are already gone.
+            await asyncio.sleep(random.uniform(1.5, 2.0))
+
+    async def _click_tile(self, root, idx: int) -> None:
+        await root.locator(TILE_WRAPPER).nth(idx).click(timeout=CLICK_TIMEOUT_MS)
+        await asyncio.sleep(random.uniform(0.3, 0.7))
 
     async def _classify_image_hybrid(self, image_bytes: bytes, target: str) -> bool:
         """Hybrid classification: Yolo for COCO, heuristics for others"""
@@ -489,16 +548,6 @@ class RecaptchaV2Solver(BaseSolver):
             return False
         except Exception:
             return False
-    
-    async def _extract_token(self, page) -> str:
-        """Extract reCAPTCHA token"""
-        try:
-            token = await page.evaluate('''
-                () => document.getElementById('g-recaptcha-response')?.value
-            ''')
-            return token if token and len(token) > 10 else None
-        except Exception:
-            return None
 
 
 class RecaptchaV3Solver(BaseSolver):
