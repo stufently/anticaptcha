@@ -63,7 +63,8 @@ def test_click_timeout_never_outlives_poll_deadline(monkeypatch):
     monkeypatch.setattr(turnstile, "CLICK_TIMEOUT", 60.0, raising=False)
     clicked, elapsed = _click_with_deadline(_HungClickPage(), 0.1)
     assert clicked is False
-    # bounded by MIN_EVAL_TIMEOUT once the deadline is (nearly) reached
+    # min(CLICK_TIMEOUT, time left), floored at MIN_EVAL_TIMEOUT like every
+    # page.evaluate in the poll: never the full CLICK_TIMEOUT near the deadline
     assert elapsed < turnstile.MIN_EVAL_TIMEOUT + 0.5
 
 
@@ -162,3 +163,13 @@ def test_jsonl_first_line_not_logged(monkeypatch, capsys):
     ])
     assert _classify(monkeypatch, stdout) == [0]
     assert SECRET not in capsys.readouterr().out
+
+
+def test_non_ascii_digit_strings_are_skipped_not_raised(monkeypatch):
+    monkeypatch.setenv("BAILIAN_CODING_PLAN_API_KEY", "test-key")
+    classifier = VisionLLMClassifier()
+    # "\u00b2" (superscript two) passes str.isdigit() but int() rejects it with
+    # a ValueError that quotes the string; it must be dropped instead
+    response = json.dumps({"indices": ["\u00b212", "7", 2]})
+    assert classifier._parse_response(response) == [2, 7]
+    assert classifier._parse_response(json.dumps(["\u00b23", 1])) == [1]

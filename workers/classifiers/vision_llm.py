@@ -95,6 +95,12 @@ def _answer_summary(result) -> str:
     return "no tile list"
 
 
+def _is_digit_string(value) -> bool:
+    """ASCII digits only: `str.isdigit()` also accepts e.g. superscripts, which
+    `int()` rejects with a ValueError quoting the model's string."""
+    return isinstance(value, str) and value.isascii() and value.isdigit()
+
+
 class VisionLLMClassifier:
     """Классификатор CAPTCHA с использованием qw2 CLI"""
 
@@ -400,7 +406,7 @@ JSON response:"""
                 indices = data["indices"]
                 if isinstance(indices, list):
                     # Remove duplicates (Codex's finding #3)
-                    unique_indices = list(set([int(x) for x in indices if isinstance(x, int) or (isinstance(x, str) and x.isdigit())]))
+                    unique_indices = list(set([int(x) for x in indices if isinstance(x, int) or _is_digit_string(x)]))
                     return sorted(unique_indices)
 
             # If it's a dict, try to extract the array
@@ -410,7 +416,7 @@ JSON response:"""
             # If it's already a list of integers
             if isinstance(data, list):
                 # Remove duplicates
-                unique_indices = list(set([int(x) for x in data if isinstance(x, int) or (isinstance(x, str) and x.isdigit())]))
+                unique_indices = list(set([int(x) for x in data if isinstance(x, int) or _is_digit_string(x)]))
                 return sorted(unique_indices)
 
             return []
