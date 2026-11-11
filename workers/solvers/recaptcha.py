@@ -1,6 +1,7 @@
 """reCAPTCHA v2/v3 solvers with stealth capabilities"""
 import asyncio
 import random
+import time
 from typing import Dict, Any, List
 from pathlib import Path
 
@@ -17,6 +18,7 @@ except ImportError:
 from workers.classifiers.vision_llm import VisionLLMClassifier
 import json
 from workers.solvers.url_guard import validate_page_url
+from workers.solvers.widget_page import check_browser_input, install_widget_page
 
 # Optional: numpy for image processing
 try:
@@ -501,63 +503,142 @@ class RecaptchaV2Solver(BaseSolver):
 
 class RecaptchaV3Solver(BaseSolver):
     """Solve reCAPTCHA v3 (invisible)"""
-    
+
+    # grecaptcha is defined by the page's own api.js, by the widget page, or by
+    # the script this solver injects; execute() must not be called before then.
+    EXECUTE_PRESENT_JS = (
+        '() => typeof grecaptcha !== "undefined" && typeof grecaptcha.execute === "function"'
+    )
+    PAGE_SCRIPT_WAIT = 5    # seconds to let a page-provided api.js define grecaptcha
+    INJECT_TIMEOUT = 15     # add_script_tag and the wait after it, under one bound
+    EXECUTE_TIMEOUT = 20    # grecaptcha.ready + grecaptcha.execute
+    POLL_INTERVAL = 0.25
+
     def __init__(self):
         super().__init__()
-    
+
     async def setup(self):
         """Setup solver"""
         pass
-    
+
     async def cleanup(self):
         """Cleanup resources"""
         pass
-    
+
     async def solve(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Solve reCAPTCHA v3
-        
+
         Args:
             input_data: {
                 "site_key": "6Le...",
                 "page_url": "https://example.com",
-                "action": "submit"  # optional
+                "action": "submit",               # optional
+                "render_mode": "page" | "widget"  # optional, default "page"
             }
-        
+
         Returns:
             {"token": "..."}
         """
-        site_key = input_data.get("site_key")
-        page_url = input_data.get("page_url")
+        site_key, page_url, render_mode = check_browser_input(input_data)
         action = input_data.get("action", "submit")
-        
-        if not site_key or not page_url:
-            raise ValueError("Missing site_key or page_url")
 
         # SSRF guard before the browser is touched (shared by all URL solvers)
         page_url = await asyncio.to_thread(validate_page_url, page_url)
 
         page = await browser_manager.new_page()
-        
+
         try:
-            # Navigate to page
-            await page.goto(page_url, timeout=settings.browser_timeout * 1000)
-            
-            # Execute reCAPTCHA v3
-            token = await page.evaluate('''
-                async (args) => {
-                    return new Promise((resolve) => {
-                        grecaptcha.ready(async () => {
-                            const token = await grecaptcha.execute(args.site_key, {
-                                action: args.action
-                            });
-                            resolve(token);
-                        });
-                    });
-                }
-            ''', {"site_key": site_key, "action": action})
-            
+            token = await self._token_from(page, page_url, site_key, action, render_mode)
             return {"token": token}
-        
         finally:
             await page.close()
+
+    async def _token_from(
+        self, page, page_url: str, site_key: str, action: str, render_mode: str
+    ) -> str:
+        """Load the page, make sure grecaptcha is there, then execute.
+
+        Every step that talks to the network or to page JavaScript is bounded:
+        an unresponsive Google endpoint used to hang the worker until its own
+        task timeout, with no clue in the error message about which step stalled.
+        """
+        if render_mode == "widget":
+            await install_widget_page(page, page_url, "recaptcha_v3", site_key)
+
+        await page.goto(page_url, timeout=settings.browser_timeout * 1000)
+
+        # A page that loads api.js itself needs no second copy — two grecaptcha
+        # instances shadow each other — so give the page's script a moment first.
+        await self._wait_for_execute(page, self.PAGE_SCRIPT_WAIT)
+
+        if not await self._has_execute(page):
+            try:
+                injected = await asyncio.wait_for(
+                    self._inject_api(page, site_key), self.INJECT_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                raise RuntimeError(
+                    "reCAPTCHA v3: api.js did not define grecaptcha.execute within 15s"
+                ) from None
+            except Exception as exc:
+                raise RuntimeError(
+                    f"reCAPTCHA v3: api.js injection failed ({type(exc).__name__})"
+                ) from None
+            if not injected:
+                raise RuntimeError(
+                    "reCAPTCHA v3: api.js loaded but grecaptcha.execute is missing"
+                )
+
+        try:
+            token = await asyncio.wait_for(
+                self._execute(page, site_key, action), self.EXECUTE_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            raise RuntimeError("reCAPTCHA v3: grecaptcha.execute timed out after 20s") from None
+        except Exception as exc:
+            # type name only: a Playwright error text is a stack dump, and the
+            # worker log does not need one to say which step failed
+            raise RuntimeError(
+                f"reCAPTCHA v3: grecaptcha.execute failed ({type(exc).__name__})"
+            ) from None
+
+        if not token or not isinstance(token, str):
+            raise RuntimeError("reCAPTCHA v3: grecaptcha.execute returned no token")
+        return token
+
+    async def _has_execute(self, page) -> bool:
+        """True when grecaptcha.execute can be called on this page right now."""
+        try:
+            return bool(await page.evaluate(self.EXECUTE_PRESENT_JS))
+        except Exception:
+            return False
+
+    async def _wait_for_execute(self, page, timeout: float) -> bool:
+        """Poll for grecaptcha.execute for up to `timeout` seconds."""
+        deadline = time.monotonic() + timeout
+        while True:
+            if await self._has_execute(page):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(self.POLL_INTERVAL)
+
+    async def _inject_api(self, page, site_key: str) -> bool:
+        """Add Google's api.js and wait for it to define execute.
+
+        Both steps belong under the caller's single bound: add_script_tag waits
+        for the script itself and hangs forever when that load stalls.
+        """
+        await page.add_script_tag(url="https://www.google.com/recaptcha/api.js?render=" + site_key)
+        return await self._wait_for_execute(page, self.INJECT_TIMEOUT)
+
+    async def _execute(self, page, site_key: str, action: str) -> str:
+        """grecaptcha.ready + execute as one promise, bounded by the caller."""
+        return await page.evaluate('''
+            async (args) => new Promise((resolve, reject) => {
+                grecaptcha.ready(() => {
+                    grecaptcha.execute(args.site_key, {action: args.action}).then(resolve, reject);
+                });
+            })
+        ''', {"site_key": site_key, "action": action})

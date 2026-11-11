@@ -19,7 +19,7 @@ class BrowserManager:
         self._playwright = None
         self._browser: Optional[Browser] = None
         self._context: Optional[BrowserContext] = None
-        self._stealth = Stealth() if HAS_STEALTH else None
+        self._stealth = Stealth(navigator_platform_override="Linux x86_64", webgl_vendor_override="Google Inc. (Intel)", webgl_renderer_override="ANGLE (Intel, Mesa Intel(R) UHD Graphics 620 (KBL GT2), OpenGL 4.6)") if HAS_STEALTH else None
         self._lock = asyncio.Lock()
 
     async def get_browser(self) -> Browser:

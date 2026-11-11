@@ -1,99 +1,150 @@
 """Cloudflare Turnstile solver"""
 import asyncio
-from typing import Dict, Any
-from workers.solvers.url_guard import validate_page_url
-from app.utils.captcha_solver import BaseSolver
+import time
+from typing import Any, Dict, Optional
+
 from app.utils.browser import browser_manager
-from app.config import settings
+from app.utils.captcha_solver import BaseSolver
+from workers.solvers.url_guard import validate_page_url
+from workers.solvers.widget_page import check_browser_input, install_widget_page
+
+# The widget iframe now lives in a closed shadow root, so no CSS selector can
+# reach it: the token is read from the light DOM (hidden input, then the
+# turnstile API) and the checkbox is clicked by container coordinates.
+TOKEN_JS = """() => {
+    const input = document.querySelector('input[name="cf-turnstile-response"]');
+    if (input && input.value) return input.value;
+    if (window.turnstile && typeof window.turnstile.getResponse === 'function') {
+        try { return window.turnstile.getResponse() || null; } catch (e) { return null; }
+    }
+    return null;
+}"""
+
+CONTAINER_JS = """() => {
+    let el = document.querySelector('.cf-turnstile');
+    if (!el) {
+        const input = document.querySelector('input[name="cf-turnstile-response"]');
+        el = input ? input.parentElement : null;
+    }
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return {x: r.x, y: r.y, width: r.width, height: r.height};
+}"""
+
+PROVIDER_FRAME_HOST = "challenges.cloudflare.com"
+GOTO_TIMEOUT_MS = 30000
+POLL_INTERVAL = 0.5
+DEADLINE_SECONDS = 30
+# An interactive widget (3x...FF test key) issues a token only after a real
+# mouse click; three attempts, one per mark, is the budget for a task.
+CLICK_AT_SECONDS = (8.0, 14.0, 20.0)
+CLICK_OFFSET_X = 30.0
 
 
 class TurnstileSolver(BaseSolver):
     """Solve Cloudflare Turnstile"""
-    
+
     def __init__(self):
         super().__init__()
-    
+
     async def setup(self):
         """Setup solver"""
         pass
-    
+
     async def cleanup(self):
         """Cleanup resources"""
         pass
-    
+
     async def solve(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Solve Cloudflare Turnstile
-        
+
         Args:
             input_data: {
                 "site_key": "...",
-                "page_url": "https://example.com"
+                "page_url": "https://example.com",
+                "render_mode": "page" | "widget"  # optional, default "page"
             }
-        
+
         Returns:
             {"token": "..."}
         """
-        site_key = input_data.get("site_key")
-        page_url = input_data.get("page_url")
-        
-        if not site_key or not page_url:
-            raise ValueError("Missing site_key or page_url")
+        site_key, page_url, render_mode = check_browser_input(input_data)
 
         # SSRF guard before the browser is touched (shared by all URL solvers)
         page_url = await asyncio.to_thread(validate_page_url, page_url)
 
         page = await browser_manager.new_page(stealth=True)
-        
+
         try:
-            # Navigate to page with extended timeout
-            await page.goto(page_url, timeout=90000, wait_until="domcontentloaded")
-            
-            # Wait for Turnstile widget with extended timeout
-            await page.wait_for_selector('iframe[src*="challenges.cloudflare.com"]', timeout=60000)
-            
-            # Wait for automatic solving (Turnstile often solves automatically)
-            await asyncio.sleep(3)
-            
-            # Try to extract token
-            token = await self._extract_token(page)
-            
+            if render_mode == "widget":
+                # The client's page may be closed to this IP by a WAF while the
+                # provider's scripts are reachable: serve the widget ourselves.
+                await install_widget_page(page, page_url, "turnstile", site_key)
+
+            await page.goto(page_url, timeout=GOTO_TIMEOUT_MS, wait_until="domcontentloaded")
+
+            token = await self._poll_token(page)
             if not token:
-                # Try alternative extraction methods
-                token = await self._extract_token_alternative(page)
-            
-            if not token:
-                raise RuntimeError("Failed to extract Turnstile token")
-            
+                raise RuntimeError("Turnstile token not received within 30s")
+
             return {"token": token}
-        
+
         finally:
             await page.close()
-    
-    async def _extract_token(self, page) -> str:
-        """Extract Turnstile token from page"""
+
+    async def _poll_token(self, page) -> Optional[str]:
+        """Poll the token until DEADLINE_SECONDS, clicking the widget on schedule."""
+        start = time.monotonic()
+        deadline = start + DEADLINE_SECONDS
+        next_click = 0
+
+        while True:
+            token = await self._read_token(page)
+            if token:
+                return token
+            now = time.monotonic()
+            if now >= deadline:
+                return None
+            if next_click < len(CLICK_AT_SECONDS) and now - start >= CLICK_AT_SECONDS[next_click]:
+                next_click += 1
+                await self._click_checkbox(page)
+            await asyncio.sleep(POLL_INTERVAL)
+
+    async def _read_token(self, page) -> Optional[str]:
+        """One token poll; None when the page is not ready or has no token yet."""
         try:
-            token = await page.evaluate('''
-                () => {
-                    return document.querySelector('input[name="cf-turnstile-response"]')?.value;
-                }
-            ''')
-            return token
+            return await page.evaluate(TOKEN_JS) or None
         except Exception:
             return None
-    
-    async def _extract_token_alternative(self, page) -> str:
-        """Alternative method to extract token"""
+
+    async def _click_checkbox(self, page) -> bool:
+        """Mouse-click the widget checkbox; report whether the click happened.
+
+        CSS cannot reach the checkbox (closed shadow root), so the click goes to
+        the container's coordinates, ~30 px from its left edge and vertically
+        centred — that is where Turnstile draws the checkbox. Skipped when the
+        provider frame is not there yet or the container has no layout box.
+        """
+        if not any(PROVIDER_FRAME_HOST in (frame.url or "") for frame in page.frames):
+            print("⏳ Turnstile: no provider frame yet, click skipped")
+            return False
+
+        box = await self._container_box(page)
+        if not box or not box.get("width") or not box.get("height"):
+            print("⏳ Turnstile: widget container has no box yet, click skipped")
+            return False
+
+        x = box["x"] + min(CLICK_OFFSET_X, box["width"] / 2)
+        y = box["y"] + box["height"] / 2
+        await page.mouse.click(x, y)
+        print(f"🖱️ Turnstile: clicked the widget checkbox at ({x:.0f}, {y:.0f})")
+        return True
+
+    async def _container_box(self, page) -> Optional[Dict[str, float]]:
+        """Viewport box of the widget container, or None when it is not laid out."""
         try:
-            token = await page.evaluate('''
-                () => {
-                    // Try to find token in turnstile object
-                    if (window.turnstile) {
-                        return window.turnstile.getResponse();
-                    }
-                    return null;
-                }
-            ''')
-            return token
-        except Exception:
+            return await page.evaluate(CONTAINER_JS)
+        except Exception as exc:
+            print(f"⚠️ Turnstile: container lookup failed ({type(exc).__name__})")
             return None
