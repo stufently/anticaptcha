@@ -45,7 +45,7 @@ _WIDGETS: Dict[str, Tuple[str, str]] = {
         "https://www.google.com/recaptcha/api.js?render={site_key}",
         '<div class="g-recaptcha" data-sitekey="{site_key}" data-size="invisible"></div>',
     ),
-    # template for milestone M3b; RecaptchaV2Solver does not use it yet
+    # used by RecaptchaV2Solver in render_mode="widget"
     "recaptcha_v2": (
         "https://www.google.com/recaptcha/api.js",
         '<div class="g-recaptcha" data-sitekey="{site_key}"></div>',

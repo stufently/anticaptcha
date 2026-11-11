@@ -47,7 +47,7 @@ class HcaptchaSolver(BaseSolver):
     """Solve hCaptcha through its checkbox.
 
     The image challenge is not solved here: an interactive challenge needs a
-    classifier (milestone M3b territory for reCAPTCHA v2), so a task that does
+    classifier this solver does not have, so a task that does
     not get a token from the checkbox flow fails with a RuntimeError saying so.
     """
 
