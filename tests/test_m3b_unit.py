@@ -258,12 +258,13 @@ def test_B4_dynamic(monkeypatch):
     """A refilling grid is clicked until the classifier finds nothing left.
 
     The fake grid plays Google's part: a click on tile 0 or 4 swaps its picture
-    400 ms later, a click on tile 2 only selects it. The classifier must see
+    a second later, a click on tile 2 only selects it. The classifier must see
     every swap land before it is asked again, verify must wait for the last
     one, and tile 2 — picked twice, never replaced — is clicked once: a second
     click would unselect it.
     """
-    monkeypatch.setattr(recaptcha_mod, "TILE_SWAP_TIMEOUT", 1)
+    # tile 2 never refills, so every pass that clicks it waits the bound out
+    monkeypatch.setattr(recaptcha_mod, "TILE_SWAP_TIMEOUT", 1.5)
     script = """
 window.__pending = 0;
 window.__pendingAtVerify = null;
@@ -284,13 +285,15 @@ document.addEventListener('click', function (event) {
       window.__swaps += 1;
       img.setAttribute('src', img.getAttribute('src') + '#swap' + window.__swaps);
       window.__pending -= 1;
-    }, 400);
+    }, 1000);
   } else {
     wrapper.classList.toggle('rc-imageselect-tileselected');
   }
 });
 """
-    stub = PendingStub([[0, 4, 2], [4, 2], []])
+    # tile 4 is clicked last: without the wait the next pick lands well
+    # inside its one-second swap (a click is followed by 0.3-0.7 s)
+    stub = PendingStub([[2, 0, 4], [4, 2], []])
 
     async def body(page):
         stub.page = page
@@ -305,7 +308,7 @@ document.addEventListener('click', function (event) {
         assert await page.evaluate("window.__pendingAtVerify") == 0
         assert await page.evaluate("window.__verify") == 1
         assert await page.evaluate("window.__swaps") == 3
-        assert await page.evaluate("window.__clicks") == [0, 4, 2, 4]
+        assert await page.evaluate("window.__clicks") == [2, 0, 4, 4]
         assert await page.evaluate(
             "document.querySelector('[data-idx=\"2\"]')"
             ".classList.contains('rc-imageselect-tileselected')"
