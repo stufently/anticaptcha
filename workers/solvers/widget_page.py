@@ -7,12 +7,17 @@ navigation to `page_url` inside the browser and answers it with a minimal page
 carrying the provider script and the site key: the widget is solved in the
 origin the provider expects, without loading the client's site.
 
+The navigation is recognised as "the first main-frame navigation of the page",
+not by comparing URLs: Chromium canonicalises the URL it requests (default
+port dropped, non-ASCII path percent-encoded, `%2e%2e` segments resolved), so a
+string comparison with `page_url` silently missed and the client's site loaded.
+
 Site keys reaching `widget_html` have passed SITE_KEY_RE in
 `check_browser_input`, so they cannot break out of the attribute or the URL
 they are interpolated into.
 """
 import re
-from typing import Any, Callable, Dict, Tuple
+from typing import Any, Dict, Tuple
 
 SITE_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 
@@ -56,16 +61,23 @@ def check_browser_input(input_data: Dict[str, Any]) -> Tuple[str, str, str]:
     """
     site_key = input_data.get("site_key")
     page_url = input_data.get("page_url")
-    render_mode = input_data.get("render_mode") or "page"
+    render_mode = input_data.get("render_mode")
 
     if not site_key or not isinstance(site_key, str):
         raise ValueError("Missing site_key")
     if not page_url or not isinstance(page_url, str):
         raise ValueError("Missing page_url")
-    if not SITE_KEY_RE.match(site_key):
+    # fullmatch: with match() the `$` also accepts a trailing "\n"
+    if not SITE_KEY_RE.fullmatch(site_key):
         raise ValueError(
             "site_key must be 1-100 characters from [A-Za-z0-9_-]"
         )
+    # optional field: only an absent key or null means "page"; a falsy value of
+    # another type (false, 0, []) is a client error, not the default
+    if render_mode is None:
+        render_mode = "page"
+    elif not isinstance(render_mode, str):
+        raise ValueError(f"render_mode must be a string, got {type(render_mode).__name__}")
     if render_mode not in ("page", "widget"):
         raise ValueError(f"render_mode must be 'page' or 'widget', got {render_mode!r}")
     return site_key, page_url, render_mode
@@ -84,26 +96,32 @@ def widget_html(kind: str, site_key: str) -> str:
     )
 
 
-def widget_route_matcher(page_url: str) -> Callable[[str], bool]:
-    """Build the `page.route` predicate for `page_url`.
-
-    A predicate, not a string: Playwright reads a string as a glob, where the
-    `.`, `?` and `*` of a real URL widen the match onto pages that are not ours.
-    The fragment is dropped because it never reaches the network layer.
-    """
-    target = page_url.split("#", 1)[0]
-
-    def matches(url: str) -> bool:
-        return url == target
-
-    return matches
+def _any_url(url: str) -> bool:
+    return True
 
 
 async def install_widget_page(page, page_url: str, kind: str, site_key: str) -> None:
-    """Serve the widget page for `page_url`; every other request goes out as is."""
+    """Answer the page's first main-frame navigation with the widget page.
+
+    Call right before `page.goto(page_url)`: that navigation is the first one
+    on a fresh page, so it is the one served, whatever form Chromium gives its
+    URL. Every other request — the provider's scripts and frames, sub-frame
+    navigations — falls through to the network or to routes installed earlier.
+    Once the widget page is served the handler removes itself, so the rest of
+    the traffic does not pass through Python.
+    """
     body = widget_html(kind, site_key)
+    served = False
 
-    async def fulfill_widget(route) -> None:
-        await route.fulfill(status=200, content_type="text/html", body=body)
+    async def serve_first_navigation(route) -> None:
+        nonlocal served
+        request = route.request
+        if not served and request.is_navigation_request() and request.frame == page.main_frame:
+            served = True
+            await route.fulfill(status=200, content_type="text/html", body=body)
+            await page.unroute(_any_url, serve_first_navigation)
+            return
+        await route.fallback()
 
-    await page.route(widget_route_matcher(page_url), fulfill_widget)
+    # a predicate, not a string: Playwright reads a string as a glob
+    await page.route(_any_url, serve_first_navigation)

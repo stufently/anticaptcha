@@ -2,7 +2,7 @@
 import asyncio
 import random
 import time
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pathlib import Path
 
 # Optional: Playwright for browser automation
@@ -513,6 +513,11 @@ class RecaptchaV3Solver(BaseSolver):
     INJECT_TIMEOUT = 15     # add_script_tag and the wait after it, under one bound
     EXECUTE_TIMEOUT = 20    # grecaptcha.ready + grecaptcha.execute
     POLL_INTERVAL = 0.25
+    # Each grecaptcha probe is bounded: by the time left in a wait (at least
+    # MIN_EVAL_TIMEOUT), or by PROBE_TIMEOUT for a single check. Hung page
+    # JavaScript must not hold the worker past the waits above.
+    MIN_EVAL_TIMEOUT = 0.5
+    PROBE_TIMEOUT = 2
 
     def __init__(self):
         super().__init__()
@@ -607,10 +612,15 @@ class RecaptchaV3Solver(BaseSolver):
             raise RuntimeError("reCAPTCHA v3: grecaptcha.execute returned no token")
         return token
 
-    async def _has_execute(self, page) -> bool:
-        """True when grecaptcha.execute can be called on this page right now."""
+    async def _has_execute(self, page, deadline: Optional[float] = None) -> bool:
+        """True when grecaptcha.execute can be called on this page right now;
+        False when it cannot or the page does not answer in time."""
+        if deadline is None:
+            timeout = self.PROBE_TIMEOUT
+        else:
+            timeout = max(self.MIN_EVAL_TIMEOUT, deadline - time.monotonic())
         try:
-            return bool(await page.evaluate(self.EXECUTE_PRESENT_JS))
+            return bool(await asyncio.wait_for(page.evaluate(self.EXECUTE_PRESENT_JS), timeout))
         except Exception:
             return False
 
@@ -618,7 +628,7 @@ class RecaptchaV3Solver(BaseSolver):
         """Poll for grecaptcha.execute for up to `timeout` seconds."""
         deadline = time.monotonic() + timeout
         while True:
-            if await self._has_execute(page):
+            if await self._has_execute(page, deadline):
                 return True
             if time.monotonic() >= deadline:
                 return False

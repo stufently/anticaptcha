@@ -1,7 +1,9 @@
 """Cloudflare Turnstile solver"""
 import asyncio
+import contextvars
 import time
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit
 
 from app.utils.browser import browser_manager
 from app.utils.captcha_solver import BaseSolver
@@ -27,6 +29,9 @@ CONTAINER_JS = """() => {
         el = input ? input.parentElement : null;
     }
     if (!el) return null;
+    // a container below the fold gets no click: bring it into the viewport
+    // first, instantly (a smooth scroll would still be moving when measured)
+    el.scrollIntoView({block: "center", inline: "center", behavior: "instant"});
     const r = el.getBoundingClientRect();
     return {x: r.x, y: r.y, width: r.width, height: r.height};
 }"""
@@ -39,6 +44,30 @@ DEADLINE_SECONDS = 30
 # mouse click; three attempts, one per mark, is the budget for a task.
 CLICK_AT_SECONDS = (8.0, 14.0, 20.0)
 CLICK_OFFSET_X = 30.0
+# Every page.evaluate in the poll loop is bounded by the time left before the
+# deadline, but gets at least this much: hung page JavaScript must not hold the
+# worker past the deadline, and a call right at it still gets a fair try.
+MIN_EVAL_TIMEOUT = 0.5
+
+# Deadline of the poll in progress, for the evaluate inside the click step
+# (the click is called with the page only). Per asyncio task, not per solver.
+_poll_deadline: contextvars.ContextVar[Optional[float]] = contextvars.ContextVar(
+    "turnstile_poll_deadline", default=None
+)
+
+
+def _eval_timeout(deadline: Optional[float]) -> float:
+    if deadline is None:
+        deadline = time.monotonic() + DEADLINE_SECONDS
+    return max(MIN_EVAL_TIMEOUT, deadline - time.monotonic())
+
+
+def _is_provider_frame(url: Optional[str]) -> bool:
+    """The frame is served by Cloudflare's challenge host (parsed, not substring)."""
+    try:
+        return urlsplit(url or "").hostname == PROVIDER_FRAME_HOST
+    except ValueError:
+        return False
 
 
 class TurnstileSolver(BaseSolver):
@@ -97,10 +126,11 @@ class TurnstileSolver(BaseSolver):
         """Poll the token until DEADLINE_SECONDS, clicking the widget on schedule."""
         start = time.monotonic()
         deadline = start + DEADLINE_SECONDS
+        _poll_deadline.set(deadline)
         next_click = 0
 
         while True:
-            token = await self._read_token(page)
+            token = await self._read_token(page, deadline)
             if token:
                 return token
             now = time.monotonic()
@@ -111,10 +141,11 @@ class TurnstileSolver(BaseSolver):
                 await self._click_checkbox(page)
             await asyncio.sleep(POLL_INTERVAL)
 
-    async def _read_token(self, page) -> Optional[str]:
-        """One token poll; None when the page is not ready or has no token yet."""
+    async def _read_token(self, page, deadline: Optional[float] = None) -> Optional[str]:
+        """One token poll; None when the page is not ready, has no token yet or
+        its JavaScript does not answer before the deadline."""
         try:
-            return await page.evaluate(TOKEN_JS) or None
+            return await asyncio.wait_for(page.evaluate(TOKEN_JS), _eval_timeout(deadline)) or None
         except Exception:
             return None
 
@@ -123,10 +154,11 @@ class TurnstileSolver(BaseSolver):
 
         CSS cannot reach the checkbox (closed shadow root), so the click goes to
         the container's coordinates, ~30 px from its left edge and vertically
-        centred — that is where Turnstile draws the checkbox. Skipped when the
-        provider frame is not there yet or the container has no layout box.
+        centred — that is where Turnstile draws the checkbox. Skipped when no
+        frame is served from the provider host yet or the container has no
+        layout box.
         """
-        if not any(PROVIDER_FRAME_HOST in (frame.url or "") for frame in page.frames):
+        if not any(_is_provider_frame(frame.url) for frame in page.frames):
             print("⏳ Turnstile: no provider frame yet, click skipped")
             return False
 
@@ -142,9 +174,12 @@ class TurnstileSolver(BaseSolver):
         return True
 
     async def _container_box(self, page) -> Optional[Dict[str, float]]:
-        """Viewport box of the widget container, or None when it is not laid out."""
+        """Viewport box of the widget container, scrolled into view first; None
+        when it is not laid out or the page does not answer before the deadline."""
         try:
-            return await page.evaluate(CONTAINER_JS)
+            return await asyncio.wait_for(
+                page.evaluate(CONTAINER_JS), _eval_timeout(_poll_deadline.get())
+            )
         except Exception as exc:
             print(f"⚠️ Turnstile: container lookup failed ({type(exc).__name__})")
             return None

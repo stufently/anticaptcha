@@ -192,3 +192,45 @@ def test_E6_fingerprint():
     assert "Linux" in fingerprint["ua"], fingerprint
     assert "HeadlessChrome" not in fingerprint["ua"], fingerprint
     assert fingerprint["renderer"] == WEBGL_RENDERER, fingerprint
+
+
+@pytest.mark.parametrize(
+    "page_url",
+    [
+        # Chromium requests these in canonical form (no default port, the path
+        # percent-encoded, dot segments resolved): the widget must still be served
+        "https://example.com:443/",
+        "https://example.com/путь/%2e%2e/виджет?q=тест",
+    ],
+    ids=["default-port", "unicode-dot-segments"],
+)
+def test_E7_widget_mode_survives_url_canonicalisation(page_url):
+    result = asyncio.run(
+        _run_solver(
+            "turnstile",
+            {"site_key": TURNSTILE_PASS_KEY, "page_url": page_url, "render_mode": "widget"},
+        )
+    )
+    assert result == {"token": TURNSTILE_DUMMY_TOKEN}
+
+
+def test_E8_turnstile_interactive_below_the_fold(monkeypatch):
+    """The container starts outside the viewport: it must be scrolled to, then clicked."""
+    from workers.solvers import widget_page
+
+    monkeypatch.setattr(
+        widget_page,
+        "_PAGE",
+        widget_page._PAGE.replace("<body>\n", '<body>\n<div style="height:3000px"></div>\n'),
+    )
+    result = asyncio.run(
+        _run_solver(
+            "turnstile",
+            {
+                "site_key": TURNSTILE_INTERACTIVE_KEY,
+                "page_url": PAGE_URL,
+                "render_mode": "widget",
+            },
+        )
+    )
+    assert result == {"token": TURNSTILE_DUMMY_TOKEN}

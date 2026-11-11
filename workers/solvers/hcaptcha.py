@@ -38,6 +38,9 @@ FRAME_TIMEOUT_MS = 20000
 CLICK_TIMEOUT_MS = 10000
 POLL_INTERVAL = 0.5
 DEADLINE_SECONDS = 20
+# Each token read is bounded by the time left before the deadline (at least
+# this much): hung page JavaScript must not hold the worker past it.
+MIN_EVAL_TIMEOUT = 0.5
 
 
 class HcaptchaSolver(BaseSolver):
@@ -112,16 +115,20 @@ class HcaptchaSolver(BaseSolver):
         deadline = time.monotonic() + DEADLINE_SECONDS
 
         while True:
-            token = await self._read_token(page)
+            token = await self._read_token(page, deadline)
             if token:
                 return token
             if time.monotonic() >= deadline:
                 return None
             await asyncio.sleep(POLL_INTERVAL)
 
-    async def _read_token(self, page) -> Optional[str]:
-        """One token poll; None when the page is not ready or has no token yet."""
+    async def _read_token(self, page, deadline: Optional[float] = None) -> Optional[str]:
+        """One token poll; None when the page is not ready, has no token yet or
+        its JavaScript does not answer before the deadline."""
+        if deadline is None:
+            deadline = time.monotonic() + DEADLINE_SECONDS
+        timeout = max(MIN_EVAL_TIMEOUT, deadline - time.monotonic())
         try:
-            return await page.evaluate(TOKEN_JS) or None
+            return await asyncio.wait_for(page.evaluate(TOKEN_JS), timeout) or None
         except Exception:
             return None
