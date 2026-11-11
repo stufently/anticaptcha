@@ -5,9 +5,12 @@
 ## Возможности
 
 - **Image-to-text** — классические текстовые CAPTCHA через OCR (работает)
-- **reCAPTCHA v2/v3**, **hCaptcha**, **Cloudflare Turnstile** — браузерные солверы
-  на Playwright. ⚠️ В 1.1.0 они не решают даже демо-страницы: API принимает такие
-  задачи, но они завершаются `failed`. Починка — следующая веха.
+- **Cloudflare Turnstile**, **hCaptcha**, **reCAPTCHA v3** — браузерные солверы
+  на Playwright; проверены на тестовых ключах провайдеров, подробности в
+  разделе «Типы задач»
+- **reCAPTCHA v2** — ждёт веху M3b (кроп плиток, раунды, сетки)
+- Режим «виджет» (`render_mode=widget`) — решает виджет провайдера даже тогда,
+  когда сайт клиента закрыт от IP воркера WAF-ом
 
 ## Технологии
 
@@ -128,6 +131,64 @@ curl -X POST http://localhost:8000/api/v1/task \
   }'
 
 # Ответ: {"task_id": 1, "status": "pending"}
+```
+
+## Типы задач
+
+| `type` | Что делает | Состояние |
+|---|---|---|
+| `image_text` | текстовая CAPTCHA по картинке (OCR) | работает |
+| `turnstile` | Cloudflare Turnstile | работает: non-interactive виджеты и тестовые ключи; интерактивный виджет (ключ `3x00000000000000000000FF`) решается кликом мыши по чекбоксу |
+| `hcaptcha` | hCaptcha | работает поток чекбокса (тестовый ключ `10000000-ffff-ffff-ffff-000000000001`); интерактивный image-челлендж не поддерживается — задача падает с `hCaptcha token not received within 20s (interactive challenge is not supported)` |
+| `recaptcha_v3` | reCAPTCHA v3 (invisible) | возвращает токен; score назначает Google, гарантий по нему нет |
+| `recaptcha_v2` | reCAPTCHA v2 (плитки) | не работает: ждёт веху M3b |
+
+Поля `input_data` для браузерных типов:
+
+| Поле | Обязательно | Описание |
+|---|---|---|
+| `site_key` | да | ключ сайта; 1–100 символов из `[A-Za-z0-9_-]`, иначе задача падает с `ValueError` |
+| `page_url` | да | страница с виджетом. Проходит SSRF-guard: loopback, приватные, неразрешимые адреса и схемы кроме http/https отвергаются |
+| `render_mode` | нет | `page` (по умолчанию) или `widget` — см. ниже |
+| `action` | нет | только для `recaptcha_v3`, по умолчанию `submit` |
+
+### `render_mode`
+
+- `page` — воркер открывает `page_url` и решает виджет на странице клиента.
+- `widget` — воркер не грузит сайт клиента: навигация на `page_url`
+  перехватывается внутри браузера, и вместо неё отдаётся минимальная страница с
+  виджетом провайдера и вашим `site_key`. Домен в запросе к провайдеру остаётся
+  прежним. Режим нужен, когда сайт закрыт от IP воркера WAF-ом (публичные
+  демо-страницы отвечают датацентру `403`), а скрипты провайдера доступны.
+
+```bash
+# Cloudflare Turnstile в режиме «виджет»
+curl -X POST http://localhost:8000/api/v1/task \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ac_xxxx..." \
+  -d '{
+    "type": "turnstile",
+    "input_data": {
+      "site_key": "1x00000000000000000000AA",
+      "page_url": "https://example.com/",
+      "render_mode": "widget"
+    }
+  }'
+
+# Ответ: {"task_id": 2, "status": "pending"}
+```
+
+Дедлайны браузерных солверов: Turnstile — 30 с на токен (клик по чекбоксу на
+8-й, 14-й и 20-й секунде, не больше трёх попыток), hCaptcha — 20 с на токен
+после клика по чекбоксу, reCAPTCHA v3 — 5 с на `api.js` самой страницы, затем
+15 с на внедрение скрипта и 20 с на `grecaptcha.execute`. По истечении дедлайна
+задача падает с `RuntimeError`, а не висит до общего таймаута воркера.
+
+Проверка на тестовых ключах провайдеров (нужен выход к Cloudflare, hCaptcha,
+Google и `example.com`):
+
+```bash
+ANTICAPTCHA_E2E=1 python -m pytest tests/test_m3a_e2e.py
 ```
 
 ## Получение результата
