@@ -18,6 +18,7 @@ import pytest
 from PIL import Image, ImageDraw, ImageStat
 
 from app.utils.browser import browser_manager
+from workers.solvers import recaptcha as recaptcha_mod
 from workers.solvers.recaptcha import RecaptchaV2Solver
 
 TILE = 126  # reCAPTCHA's tile window, measured live on the Google demo
@@ -155,6 +156,19 @@ class StubClassifier:
         return self.picks.pop(0) if self.picks else []
 
 
+class PendingStub(StubClassifier):
+    """Also notes how many tile swaps were still on their way at each call."""
+
+    def __init__(self, picks):
+        super().__init__(picks)
+        self.page = None
+        self.pending = []
+
+    async def classify_tiles(self, image_bytes, instruction, grid_size="3x3"):
+        self.pending.append(await self.page.evaluate("window.__pending"))
+        return await super().classify_tiles(image_bytes, instruction, grid_size)
+
+
 def test_B1_crop():
     """A tile shot is one 126x126 crop, not the 378x378 sprite of all nine.
 
@@ -240,25 +254,62 @@ function onVerify(n) {
     asyncio.run(_run(_dom(DESC_HYDRANT, script), body))
 
 
-def test_B4_dynamic():
-    """A refilling grid is clicked until the classifier finds nothing left."""
+def test_B4_dynamic(monkeypatch):
+    """A refilling grid is clicked until the classifier finds nothing left.
+
+    The fake grid plays Google's part: a click on tile 0 or 4 swaps its picture
+    400 ms later, a click on tile 2 only selects it. The classifier must see
+    every swap land before it is asked again, verify must wait for the last
+    one, and tile 2 — picked twice, never replaced — is clicked once: a second
+    click would unselect it.
+    """
+    monkeypatch.setattr(recaptcha_mod, "TILE_SWAP_TIMEOUT", 1)
     script = """
+window.__pending = 0;
+window.__pendingAtVerify = null;
+window.__swaps = 0;
+const REFILLS = {0: true, 4: true};
 function onVerify(n) {
+  window.__pendingAtVerify = window.__pending;
   clearErrors();
   setToken('%TOKEN%');
 }
+document.addEventListener('click', function (event) {
+  const wrapper = event.target.closest('.rc-image-tile-wrapper');
+  if (!wrapper) return;
+  if (REFILLS[Number(wrapper.dataset.idx)]) {
+    window.__pending += 1;
+    setTimeout(function () {
+      const img = wrapper.querySelector('img');
+      window.__swaps += 1;
+      img.setAttribute('src', img.getAttribute('src') + '#swap' + window.__swaps);
+      window.__pending -= 1;
+    }, 400);
+  } else {
+    wrapper.classList.toggle('rc-imageselect-tileselected');
+  }
+});
 """
-    stub = StubClassifier([[0, 4], [4], []])
+    stub = PendingStub([[0, 4, 2], [4, 2], []])
 
     async def body(page):
+        stub.page = page
         solver = RecaptchaV2Solver()
         solver.vision_classifier = stub
         assert await solver._solve_rounds(page, page) == TOKEN
         # three picks, all before the single verify: the grid is cleared first
         assert len(stub.calls) == 3
-        assert await page.evaluate("window.__verify") == 1
-        assert await page.evaluate("window.__clicks") == [0, 4, 4]
         assert stub.calls[0] == ("Select all fire hydrants", "3x3")
+        # no pick and no verify while a swap was still on its way
+        assert stub.pending == [0, 0, 0]
+        assert await page.evaluate("window.__pendingAtVerify") == 0
+        assert await page.evaluate("window.__verify") == 1
+        assert await page.evaluate("window.__swaps") == 3
+        assert await page.evaluate("window.__clicks") == [0, 4, 2, 4]
+        assert await page.evaluate(
+            "document.querySelector('[data-idx=\"2\"]')"
+            ".classList.contains('rc-imageselect-tileselected')"
+        )
 
     asyncio.run(_run(_dom(DESC_DYNAMIC, script), body))
 
@@ -267,7 +318,9 @@ def test_B5_rounds_exhausted():
     """A challenge that only ever answers `select-more` stops after 5 rounds."""
     script = """
 function onVerify(n) {
-  showError('rc-imageselect-error-select-more');
+  // the banner of the previous round goes away, the new one comes back
+  clearErrors();
+  setTimeout(function () { showError('rc-imageselect-error-select-more'); }, 400);
 }
 """
     stub = StubClassifier([[0]])

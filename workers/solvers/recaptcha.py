@@ -1,6 +1,7 @@
 """reCAPTCHA v2/v3 solvers with stealth capabilities"""
 import asyncio
 import random
+import re
 import time
 from typing import Dict, Any, List, Optional
 from pathlib import Path
@@ -81,6 +82,24 @@ TOKEN_POLL_INTERVAL = 0.25
 
 MAX_ROUNDS = 5
 MAX_DYNAMIC_PASSES = 5
+TILE_SWAP_TIMEOUT = 5        # seconds to wait for clicked dynamic tiles to refill
+CALL_TIMEOUT = 5             # bound on one page call made outside a poll
+MIN_CALL_TIMEOUT = 0.5       # least time a page call gets, even past a deadline
+
+# (picture URL, selected) of every tile wrapper. Google marks a selected tile
+# on its <td>; the wrapper itself is checked too.
+TILE_STATES_JS = """els => els.map(w => {
+    const img = w.querySelector('img');
+    const cell = w.closest('td');
+    const cls = 'rc-imageselect-tileselected';
+    return [img ? img.getAttribute('src') : null,
+            w.classList.contains(cls) || !!(cell && cell.classList.contains(cls))];
+})"""
+
+# Local fallback classes are singular underscore names ("fire_hydrant").
+LOCAL_ARTICLES = {"a", "an", "the"}
+LOCAL_SINGULARS = {"bus": "bus", "buses": "bus", "stairs": "stairs", "taxis": "taxi"}
+LOCAL_PHRASES = {"mountains or hills": "mountain", "mountain or hill": "mountain"}
 
 
 class RecaptchaV2Solver(BaseSolver):
@@ -184,19 +203,42 @@ class RecaptchaV2Solver(BaseSolver):
         deadline = time.monotonic() + timeout
 
         while True:
-            token = await self._read_token(page)
+            token = await self._read_token(page, deadline)
             if token:
                 return token
             if time.monotonic() >= deadline:
                 return None
             await asyncio.sleep(TOKEN_POLL_INTERVAL)
 
-    async def _read_token(self, page) -> Optional[str]:
-        """One token read off the page; None when there is no token yet."""
+    async def _read_token(self, page, deadline: Optional[float] = None) -> Optional[str]:
+        """One token read off the page; None when there is no token yet.
+
+        Bounded: a page whose JavaScript hangs would otherwise keep a poll
+        that promises 6 or 10 seconds waiting forever.
+        """
         try:
-            return await page.evaluate(TOKEN_JS) or None
+            return await self._bounded(page.evaluate(TOKEN_JS), deadline) or None
         except Exception:
             return None
+
+    @staticmethod
+    def _budget(deadline: Optional[float]) -> float:
+        """Seconds one page call may take: what is left of `deadline`, never
+        less than MIN_CALL_TIMEOUT, and CALL_TIMEOUT outside a poll."""
+        if deadline is None:
+            return CALL_TIMEOUT
+        return max(deadline - time.monotonic(), MIN_CALL_TIMEOUT)
+
+    async def _bounded(self, awaitable, deadline: Optional[float] = None):
+        return await asyncio.wait_for(awaitable, self._budget(deadline))
+
+    @staticmethod
+    def _stalled(deadline: float, started: float) -> bool:
+        """The deadline has passed and this poll pass spent time on a call
+        that did not answer, so the rest of the pass is not worth waiting for.
+        A fast pass still runs to the end, so timeout=0 means one full look."""
+        now = time.monotonic()
+        return now >= deadline and now - started >= MIN_CALL_TIMEOUT
 
     async def _solve_rounds(self, page, root) -> str:
         """Answer the challenge round after round until Google issues a token.
@@ -215,11 +257,17 @@ class RecaptchaV2Solver(BaseSolver):
             if ch["dynamic"]:
                 await self._clear_dynamic_grid(root, ch)
             else:
-                for idx in await self._pick(root, ch):
-                    await self._click_tile(root, idx)
+                await self._click_tiles(root, await self._pick(root, ch))
 
+            # The screen as verify finds it: a dynamic grid has swapped tiles
+            # since `ch`, and a banner left over from the previous round must
+            # not pass for the answer to this one.
+            before = await self._read_challenge(root)
+            banners = await self._visible_banners(root)
             await root.locator(VERIFY_BUTTON).click(timeout=CLICK_TIMEOUT_MS)
-            outcome = await self._wait_round_outcome(page, root, timeout=10, before=ch)
+            outcome = await self._wait_round_outcome(
+                page, root, timeout=10, before=before, banners=banners
+            )
 
             if outcome == "token":
                 token = await self._read_token(page)
@@ -234,57 +282,99 @@ class RecaptchaV2Solver(BaseSolver):
 
         raise RuntimeError("reCAPTCHA v2: challenge not solved in 5 rounds")
 
-    async def _wait_round_outcome(self, page, root, timeout=10, before=None) -> str:
+    async def _wait_round_outcome(
+        self, page, root, timeout=10, before=None, banners=()
+    ) -> str:
         """What verify produced: "token", "retry" or "timeout".
 
         "retry" covers both ways Google asks again — an error banner, and a
-        silently replaced challenge. `before` is the challenge as read at the
-        start of the round; without it a replacement right after the click would
-        sit out the whole timeout looking like a challenge nobody answered.
+        silently replaced challenge (new instruction, grid size or pictures).
+        `before` is the challenge as it stood when verify was clicked; without
+        it a replacement would sit out the whole timeout looking like a
+        challenge nobody answered. `banners` were already visible then: such a
+        banner speaks for the previous round and counts only once it has gone
+        and come back.
         """
         deadline = time.monotonic() + timeout
+        stale = set(banners)
 
         while True:
-            if await self._read_token(page):
+            started = time.monotonic()
+            if await self._read_token(page, deadline):
                 return "token"
             for selector in CHALLENGE_ERRORS:
-                if await self._visible(root, selector):
+                if self._stalled(deadline, started):
+                    return "timeout"
+                visible = await self._visible(root, selector, deadline)
+                if visible and selector not in stale:
                     return "retry"
-            if before is not None and await self._read_challenge(root) != before:
-                return "retry"
+                if visible is False:
+                    stale.discard(selector)
+            if before is not None and not self._stalled(deadline, started):
+                try:
+                    now = await self._bounded(self._read_challenge(root, deadline), deadline)
+                except Exception:
+                    now = None  # a read that did not answer is no news
+                if now is not None and now != before:
+                    return "retry"
             if time.monotonic() >= deadline:
                 return "timeout"
             await asyncio.sleep(TOKEN_POLL_INTERVAL)
 
-    async def _read_challenge(self, root) -> dict:
+    async def _read_challenge(self, root, deadline: Optional[float] = None) -> dict:
         """What the grid on screen asks for right now.
 
         The target is the emphasized word of the instruction; a layout without
         <strong> leaves the whole instruction as the target, because guessing it
         out of a fixed word list is what made unknown challenges unsolvable.
+        `images` are the tile picture URLs: Google may replace the pictures
+        and keep everything else.
         """
-        instruction = await self._text(root, CHALLENGE_DESC)
-        target = await self._text(root, CHALLENGE_STRONG) or instruction
-        tiles = await root.locator(TILE_WRAPPER).count()
+        instruction = await self._text(root, CHALLENGE_DESC, deadline)
+        target = await self._text(root, CHALLENGE_STRONG, deadline) or instruction
+        tiles = await self._bounded(root.locator(TILE_WRAPPER).count(), deadline)
+        images = tuple(src for src, _ in await self._tile_states(root, deadline))
         return {
+            "images": images,
             "target": target,
             "instruction": instruction,
             "grid": "4x4" if tiles == 16 else "3x3",
             "dynamic": DYNAMIC_MARKER in instruction.lower(),
         }
 
-    async def _text(self, root, selector: str) -> str:
+    async def _text(self, root, selector: str, deadline: Optional[float] = None) -> str:
         """Whitespace-normalized text of the first match; "" when there is none."""
         locator = root.locator(selector).first
-        if not await locator.count():
+        if not await self._bounded(locator.count(), deadline):
             return ""
-        return " ".join(((await locator.text_content()) or "").split())
+        text = await self._bounded(locator.text_content(), deadline)
+        return " ".join((text or "").split())
 
-    async def _visible(self, root, selector: str) -> bool:
+    async def _visible(self, root, selector: str, deadline: Optional[float] = None):
+        """True/False, or None when the page did not answer in time."""
         try:
-            return await root.locator(selector).first.is_visible()
+            return await self._bounded(root.locator(selector).first.is_visible(), deadline)
         except Exception:
-            return False
+            return None
+
+    async def _visible_banners(self, root) -> frozenset:
+        return frozenset(
+            [selector for selector in CHALLENGE_ERRORS if await self._visible(root, selector)]
+        )
+
+    async def _tile_states(self, root, deadline: Optional[float] = None) -> list:
+        """(picture URL, selected) of every tile, in tile order."""
+        states = await self._bounded(
+            root.locator(TILE_WRAPPER).evaluate_all(TILE_STATES_JS), deadline
+        )
+        return [(src, bool(selected)) for src, selected in states]
+
+    async def _tile_srcs(self, root) -> list:
+        """Tile picture URLs; [] when the grid could not be read."""
+        try:
+            return [src for src, _ in await self._tile_states(root)]
+        except Exception:
+            return []
 
     async def _grab_tile_shots(self, root) -> list[bytes]:
         """One screenshot per tile, cropped to that tile.
@@ -304,9 +394,10 @@ class RecaptchaV2Solver(BaseSolver):
         tiles = await root.locator(TILE_WRAPPER).count()
         try:
             shot = await root.locator(CHALLENGE_TARGET).screenshot()
-            picked = await self.vision_classifier.classify_tiles(
+            # an index named twice would be clicked twice, which unselects it
+            picked = list(dict.fromkeys(await self.vision_classifier.classify_tiles(
                 shot, f"Select all {ch['target']}", ch["grid"]
-            )
+            )))
         except Exception as exc:
             # No API key, a dead endpoint or a missing target element all land
             # here; the per-tile crops still allow the local classifier to try.
@@ -320,13 +411,42 @@ class RecaptchaV2Solver(BaseSolver):
 
     async def _pick_with_yolo(self, root, ch) -> list[int]:
         """Local fallback: classify each cropped tile on its own."""
-        # `_classify_image_hybrid` speaks underscore names, the page does not
-        target = ch["target"].lower().replace(" ", "_")
+        # `_classify_image_hybrid` speaks singular underscore names, the page
+        # says "fire hydrants"
+        target = self._local_class(ch["target"])
         picked = []
         for idx, shot in enumerate(await self._grab_tile_shots(root)):
             if await self._classify_image_hybrid(shot, target):
                 picked.append(idx)
         return picked
+
+    @staticmethod
+    def _local_class(target: str) -> str:
+        """The page's wording as a local class name: "fire hydrants" ->
+        "fire_hydrant", "a bus" -> "bus", "Select all images with traffic
+        lights" -> "traffic_light"."""
+        text = re.sub(r"^\s*select all (images|squares) with\s+", "", target.lower())
+        words = re.sub(r"[^a-z ]+", " ", text.split(".")[0]).split()
+        while words and words[0] in LOCAL_ARTICLES:
+            words.pop(0)
+        phrase = " ".join(words)
+        if phrase in LOCAL_PHRASES:
+            return LOCAL_PHRASES[phrase]
+        if words:
+            words[-1] = RecaptchaV2Solver._singular(words[-1])
+        return "_".join(words)
+
+    @staticmethod
+    def _singular(word: str) -> str:
+        if word in LOCAL_SINGULARS:
+            return LOCAL_SINGULARS[word]
+        if word.endswith("ies") and len(word) > 4:
+            return word[:-3] + "y"
+        if word.endswith(("ches", "shes", "xes", "sses")):
+            return word[:-2]
+        if word.endswith("s") and not word.endswith("ss"):
+            return word[:-1]
+        return word
 
     async def _clear_dynamic_grid(self, root, ch) -> None:
         """Click a refilling grid until it has nothing left to select.
@@ -340,11 +460,63 @@ class RecaptchaV2Solver(BaseSolver):
             picked = await self._pick(root, ch)
             if not picked:
                 return
-            for idx in picked:
-                await self._click_tile(root, idx)
-            # Google swaps the clicked tiles server-side; clicking the next
-            # batch before the swap lands selects tiles that are already gone.
+            before = await self._tile_srcs(root)
+            clicked = await self._click_tiles(root, picked)
+            if not clicked:
+                print("⚠️ reCAPTCHA v2: every picked tile is already selected, verifying")
+                return
+            # Google swaps the clicked tiles server-side; classifying before
+            # the swap lands sees the old pictures and clicks them again.
+            if not await self._wait_tiles_swapped(root, clicked, before):
+                print(
+                    f"⚠️ reCAPTCHA v2: tiles {clicked} not replaced within "
+                    f"{TILE_SWAP_TIMEOUT}s, picking again anyway"
+                )
+        print(
+            f"⚠️ reCAPTCHA v2: dynamic grid still has matches after "
+            f"{MAX_DYNAMIC_PASSES} passes, verifying anyway"
+        )
+
+    async def _wait_tiles_swapped(self, root, clicked: list, before: list) -> bool:
+        """Wait up to TILE_SWAP_TIMEOUT for every clicked tile to show a new picture."""
+        if not before:
+            # the grid could not be read: the old fixed pause is all there is
             await asyncio.sleep(random.uniform(1.5, 2.0))
+            return False
+        deadline = time.monotonic() + TILE_SWAP_TIMEOUT
+        while True:
+            try:
+                now = [src for src, _ in await self._tile_states(root, deadline)]
+            except Exception:
+                now = before
+            if all(
+                idx < len(now) and idx < len(before) and now[idx] != before[idx]
+                for idx in clicked
+            ):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(TOKEN_POLL_INTERVAL)
+
+    async def _click_tiles(self, root, picked: list) -> list[int]:
+        """Click the picked tiles that are not selected yet; return those clicked.
+
+        A second click on a selected tile unselects it.
+        """
+        if not picked:
+            return []
+        try:
+            selected = {i for i, (_, sel) in enumerate(await self._tile_states(root)) if sel}
+        except Exception:
+            selected = set()
+        clicked = []
+        for idx in picked:
+            if idx in selected:
+                print(f"↪️ reCAPTCHA v2: tile {idx} already selected, not clicking it again")
+                continue
+            await self._click_tile(root, idx)
+            clicked.append(idx)
+        return clicked
 
     async def _click_tile(self, root, idx: int) -> None:
         await root.locator(TILE_WRAPPER).nth(idx).click(timeout=CLICK_TIMEOUT_MS)
