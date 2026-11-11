@@ -2,7 +2,98 @@
 
 ## [Unreleased]
 
+### Added
+- Режим «виджет» для браузерных солверов: необязательное поле `render_mode` в
+  `input_data` (`page` — по умолчанию, `widget`). В режиме `widget` воркер не
+  грузит сайт клиента: первая навигация главного фрейма (это `goto(page_url)`
+  солвера) перехватывается `page.route`, и вместо неё отдаётся минимальная
+  страница с виджетом провайдера и `site_key`; остальные запросы идут дальше
+  через `route.fallback()`, а после выдачи страницы обработчик снимается. Origin в запросе к провайдеру
+  остаётся прежним, поэтому режим решает задачу и тогда, когда сайт закрыт от IP
+  воркера WAF-ом (публичные демо-страницы отвечают датацентру 403), а скрипты
+  провайдера доступны.
+- Общий модуль `workers/solvers/widget_page.py`: `check_browser_input`
+  (единый контракт входа — `site_key` 1–100 символов `[A-Za-z0-9_-]`,
+  `page_url`, `render_mode`), `widget_html` (шаблоны turnstile, hcaptcha,
+  recaptcha_v3 и recaptcha_v2 — последний для вехи M3b, солвер v2 его пока не
+  использует) и `install_widget_page`.
+- `tests/test_m3a_unit.py` — 37 тестов (U1) без сети: отказ на пустых полях и на
+  `site_key` с `"`, `<`, пробелом или длиной 101, на `render_mode="iframe"`;
+  приём тестовых ключей всех трёх провайдеров в обоих режимах; содержимое
+  `widget_html`; предикат маршрута; скрытие токена в логе воркера.
+- `tests/test_m3a_e2e.py` — 6 тестов (E1–E6) против тестовых ключей провайдеров,
+  только при `ANTICAPTCHA_E2E=1`. Солверы вызываются как в воркере (класс из
+  `SOLVERS`, `setup()`/`solve()`/`cleanup()`), `page_url="https://example.com/"`,
+  `render_mode="widget"`. Замер в образе `anticaptcha:m2-accept`: 6 passed за
+  50,9 с (E1 2,4 с; E2 30,5 с; E3 8,9 с; E4 1,2 с; E5 5,5 с; E6 0,4 с).
+
 ### Fixed
+- Режим `widget` молча не срабатывал, если Chromium менял URL навигации
+  (`:443` убирается, кириллица в пути кодируется, `%2e%2e` схлопывается):
+  предикат сравнивал URL с `page_url` буквально, и грузился сайт клиента.
+  Теперь подменяется первая навигация главного фрейма без сравнения URL;
+  `widget_route_matcher` удалён. E2E: `:443` и Unicode-путь с `%2e%2e`.
+- Опрос токена Turnstile/hCaptcha и ожидание `grecaptcha.execute` v3 не
+  ограничивали сам `page.evaluate`: при зависшем JS страницы дедлайны 30/20/5 с
+  не действовали. Каждый вызов — под `asyncio.wait_for` с остатком до дедлайна
+  (не меньше 0,5 с; одиночная проверка v3 — 2 с).
+- Turnstile: контейнер ниже экрана не получал клика — перед замером бокса он
+  прокручивается в центр (`scrollIntoView`). Фрейм провайдера определяется по
+  hostname (`challenges.cloudflare.com`), а не подстрокой URL.
+- `check_browser_input`: `site_key` с завершающим `\n` принимался
+  (`match` + `$`), теперь `fullmatch`. `render_mode` по умолчанию `page` только
+  при отсутствии ключа или `null`; `false`, `0`, `[]`, `""` и прочие нестроковые
+  значения — `ValueError`.
+- `tests/test_m3a_contracts.py` — тесты без сети на граничные значения и
+  дедлайны (виртуальные часы), выжившие в независимом мутационном прогоне.
+- Turnstile (`workers/solvers/turnstile.py`): iframe виджета теперь в закрытом
+  shadow DOM, поэтому CSS-селектор `iframe[src*="challenges.cloudflare.com"]`
+  его не видел и `wait_for_selector` висел 60 с, хотя токен уже лежал в
+  `input[name="cf-turnstile-response"]` (light DOM). Ожидание по селектору
+  убрано: токен опрашивается каждые 0,5 с (hidden input, затем
+  `turnstile.getResponse()`) с общим дедлайном 30 с, а на 8-й, 14-й и 20-й
+  секунде — не больше трёх попыток за задачу — выполняется клик мышью по
+  координатам контейнера (~30 px от левого края, по вертикальному центру):
+  интерактивный виджет выдаёт токен только после настоящего клика. Клик
+  пропускается, если фрейма `challenges.cloudflare.com` ещё нет в `page.frames`
+  или у контейнера нулевой box. Нет токена к дедлайну —
+  `RuntimeError("Turnstile token not received within 30s")`. Замер: ключ
+  `1x…AA` → `XXXX.DUMMY.TOKEN.XXXX` за 2,4 с; `3x…FF` → тот же токен за 8,9 с
+  (с мутацией «клик не выполняется» — `RuntimeError` через 30 с); `2x…AB` →
+  `RuntimeError` через 30,5 с.
+- hCaptcha (`workers/solvers/hcaptcha.py`): `iframe[src*="hcaptcha"]` матчит два
+  фрейма — checkbox и challenge, — из-за чего клик падал в strict mode violation
+  (замер: `resolved to 2 elements`), а селектор `.checkbox` не находил элемент
+  `#checkbox`. Селектор закреплён модульной константой
+  `CHECKBOX_FRAME = 'iframe[src*="frame=checkbox"]'` (замер: 1 совпадение),
+  фиксированный `sleep(3)` заменён опросом `[name=h-captcha-response]` /
+  `hcaptcha.getResponse()` каждые 0,5 с до 20 с. `NotImplementedError` убран:
+  интерактивный image-челлендж не поддерживается и задача падает с
+  `RuntimeError("hCaptcha token not received within 20s (interactive challenge
+  is not supported)")`. Замер: тестовый ключ `10000000-ffff-…` →
+  `10000000-aaaa-bbbb-cccc-000000000001` за 1,2 с.
+- reCAPTCHA v3 (`RecaptchaV3Solver` в `workers/solvers/recaptcha.py`): работал,
+  только если страница сама грузила `api.js?render=<key>`, иначе
+  `ReferenceError: grecaptcha is not defined`, а ожидание `grecaptcha.ready`
+  вообще не было ограничено. Теперь: до 5 с ждём `grecaptcha.execute` от страницы
+  (второй экземпляр `api.js` не внедряется — два объекта `grecaptcha` затеняют
+  друг друга), затем `add_script_tag` и ожидание `execute` — оба шага под одним
+  `asyncio.wait_for(..., 15)` (`add_script_tag` сам ждёт загрузки скрипта и без
+  ограничения висит на зависшей загрузке), а `grecaptcha.ready` + `execute` — под
+  `asyncio.wait_for(..., 20)`. Ошибки JS и таймауты превращаются в `RuntimeError`
+  с коротким текстом `reCAPTCHA v3: …` без стека Playwright. Замер: на
+  `example.com` без `api.js` и с подменённым скриптом Google токен получен за
+  5,5 с; с мутацией «инъекция отключена» — `RuntimeError` вместо токена.
+- Отпечаток браузера (`app/utils/browser.py`): `Stealth` создавался без
+  переопределений, и playwright-stealth 2.0.3 выдавал `navigator.platform =
+  "Win32"` и WebGL-строку Mac при UA Linux — противоречие, по которому виджет
+  провайдера отличает бота. Теперь platform `Linux x86_64`, vendor
+  `Google Inc. (Intel)`, renderer `ANGLE (Intel, Mesa Intel(R) UHD Graphics 620
+  (KBL GT2), OpenGL 4.6)`. Замер на `https://example.com/`: `navigator.platform
+  = Linux x86_64`, UA `…(X11; Linux x86_64) … Chrome/158.0.8127.18 Safari/537.36`
+  (без `HeadlessChrome`), `UNMASKED_RENDERER_WEBGL` равен строке выше. На
+  `about:blank` патчи UA и WebGL не применяются (platform при этом уже Linux) —
+  поэтому e2e-проверка отпечатка открывается на настоящей странице.
 - Остановка qwen CLI (`_reap` в `workers/classifiers/vision_llm.py`): группа
   процессов убивается (`killpg`) и после того, как asyncio собрал лидера.
   Раньше `killpg` стоял под условием, что лидер ещё не собран, а CLI
@@ -35,6 +126,14 @@
   `workers`, ни в `tests` (grep). Импорт `BrowserContext` оставлен: аннотация
   `self._context: Optional[BrowserContext]` у атрибута вычисляется в рантайме,
   без импорта `BrowserManager.__init__` падал бы с `NameError`.
+
+### Security
+- Лог воркера больше не печатает токен задачи: строка «solved» выводит
+  `_redact(result)`, где строки длиннее 16 символов заменяются на `<N chars>`,
+  а короткие значения (ответ `image_text`) остаются как есть. В базе
+  `task.result` сохраняет настоящий токен — клиент его получает. Замер: токен из
+  40 символов в stdout отсутствует, на его месте `<40 chars>`
+  (`tests/test_m3a_unit.py`).
 
 ### Known limitations
 - `_reap` шлёт `killpg` по сохранённому номеру PID лидера. Когда группа

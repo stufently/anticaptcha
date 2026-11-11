@@ -32,6 +32,26 @@ SOLVERS = {
 
 RESTART_ERROR = "worker restarted while processing the task"
 
+# Strings up to this length are useful in a log (an image_text answer); longer
+# ones are tokens or cookies, and the worker log is not a secret store.
+REDACT_MAX_VISIBLE = 16
+
+
+def _redact_value(value: Any) -> Any:
+    """Length-only stand-in for long strings, recursively through containers."""
+    if isinstance(value, str):
+        return value if len(value) <= REDACT_MAX_VISIBLE else f"<{len(value)} chars>"
+    if isinstance(value, dict):
+        return {k: _redact_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_value(v) for v in value]
+    return value
+
+
+def _redact(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy of a solver result safe to print; the task row keeps the real one."""
+    return {k: _redact_value(v) for k, v in result.items()}
+
 
 class TaskWorker:
     """Process CAPTCHA solving tasks"""
@@ -108,7 +128,7 @@ class TaskWorker:
             task.solved_at = datetime.utcnow()
             db.commit()
             
-            print(f"✅ Task {task.id} solved: {result}")
+            print(f"✅ Task {task.id} solved: {_redact(result)}")
             
         except Exception as e:
             # Handle failure
