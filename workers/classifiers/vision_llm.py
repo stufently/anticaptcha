@@ -75,12 +75,24 @@ async def _reap(process) -> None:
             pass
     try:
         process.kill()
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
         pass
     try:
         await asyncio.wait_for(process.wait(), timeout=_REAP_TIMEOUT)
     except asyncio.TimeoutError:
         print(f"⚠️ qwen process not reaped within {_REAP_TIMEOUT}s", flush=True)
+
+
+def _answer_summary(result) -> str:
+    """Safe log line for a model answer: the tile count only, never its text.
+
+    The answer (and any reasoning the model puts next to it) is shaped by an
+    attacker-controlled image, so it stays out of the log.
+    """
+    indices = result.get("indices") if isinstance(result, dict) else None
+    if isinstance(indices, list):
+        return f"{len(indices)} tile(s) selected"
+    return "no tile list"
 
 
 class VisionLLMClassifier:
@@ -256,11 +268,6 @@ JSON response:"""
             output = stdout.decode().strip()
             print(f"📥 Received output from qwen ({len(output)} bytes, exit code: {process.returncode})")
 
-            # Debug: print first line
-            if output:
-                first_line = output.split('\n')[0]
-                print(f"   First line (first 200 chars): {first_line[:200]}")
-
             # qwen may exit with code 1 even when successful (warnings, etc.)
             # We check if we have valid output with structured_result
 
@@ -293,7 +300,7 @@ JSON response:"""
                     # Check for structured result
                     if data.get('type') == 'result' and 'structured_result' in data:
                         result = data['structured_result']
-                        print(f"✅ qwen response (structured): {result}")
+                        print(f"✅ qwen response (structured): {_answer_summary(result)}")
                         result_found = True
                         return json.dumps(result)
 
@@ -306,7 +313,7 @@ JSON response:"""
                                 for item in content:
                                     if isinstance(item, dict) and item.get('type') == 'text':
                                         last_assistant_text = item.get('text', '')
-                                        print(f"   Found text: {last_assistant_text[:100]}")
+                                        print(f"   Found assistant text ({len(last_assistant_text)} chars)")
 
             except json.JSONDecodeError as e:
                 print(f"⚠️ Failed to parse output as JSON: {e}")
@@ -314,7 +321,7 @@ JSON response:"""
 
             # If no structured result, try to parse last assistant text as JSON
             if not result_found and last_assistant_text:
-                print(f"⚠️ No structured_result found, trying to parse text: {last_assistant_text[:200]}")
+                print(f"⚠️ No structured_result found, parsing assistant text ({len(last_assistant_text)} chars)")
 
                 # Try multiple methods to extract JSON array
                 text = last_assistant_text.strip()
@@ -327,7 +334,7 @@ JSON response:"""
                         indices = json.loads(markdown_json.group(1))
                         if isinstance(indices, list):
                             result = {"indices": indices}
-                            print(f"✅ qwen response (from markdown): {result}")
+                            print(f"✅ qwen response (from markdown): {_answer_summary(result)}")
                             return json.dumps(result)
                     except json.JSONDecodeError:
                         pass
@@ -341,7 +348,7 @@ JSON response:"""
                             indices = json.loads(json_str)
                             if isinstance(indices, list) and all(isinstance(i, int) for i in indices):
                                 result = {"indices": indices}
-                                print(f"✅ qwen response (from text): {result}")
+                                print(f"✅ qwen response (from text): {_answer_summary(result)}")
                                 return json.dumps(result)
                         except json.JSONDecodeError:
                             continue
@@ -351,13 +358,13 @@ JSON response:"""
                     indices = json.loads(text)
                     if isinstance(indices, list):
                         result = {"indices": indices}
-                        print(f"✅ qwen response (parsed): {result}")
+                        print(f"✅ qwen response (parsed): {_answer_summary(result)}")
                         return json.dumps(result)
                 except (json.JSONDecodeError, ValueError) as e:
                     print(f"⚠️ Failed to parse text as JSON: {e}")
 
             print(f"⚠️ No structured_result found in output")
-            print(f"   Last assistant text: {last_assistant_text}")
+            print(f"   Last assistant text: {len(last_assistant_text or '')} chars")
             return "{}"
 
         except FileNotFoundError as e:

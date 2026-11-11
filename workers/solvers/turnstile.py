@@ -48,6 +48,9 @@ CLICK_OFFSET_X = 30.0
 # deadline, but gets at least this much: hung page JavaScript must not hold the
 # worker past the deadline, and a call right at it still gets a fair try.
 MIN_EVAL_TIMEOUT = 0.5
+# Upper bound for one mouse click: a page that stops answering (renderer hung,
+# CDP stalled) must not hold the poll loop past its deadline.
+CLICK_TIMEOUT = 5.0
 
 # Deadline of the poll in progress, for the evaluate inside the click step
 # (the click is called with the page only). Per asyncio task, not per solver.
@@ -169,7 +172,12 @@ class TurnstileSolver(BaseSolver):
 
         x = box["x"] + min(CLICK_OFFSET_X, box["width"] / 2)
         y = box["y"] + box["height"] / 2
-        await page.mouse.click(x, y)
+        timeout = min(CLICK_TIMEOUT, _eval_timeout(_poll_deadline.get()))
+        try:
+            await asyncio.wait_for(page.mouse.click(x, y), timeout)
+        except asyncio.TimeoutError:
+            print(f"⚠️ Turnstile: checkbox click timed out after {timeout:.1f}s")
+            return False
         print(f"🖱️ Turnstile: clicked the widget checkbox at ({x:.0f}, {y:.0f})")
         return True
 
