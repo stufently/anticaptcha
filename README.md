@@ -149,7 +149,7 @@ curl -X POST http://localhost:8000/api/v1/task \
 |---|---|---|
 | `site_key` | да | ключ сайта; 1–100 символов из `[A-Za-z0-9_-]`, иначе задача падает с `ValueError` |
 | `page_url` | да | страница с виджетом. Проходит SSRF-guard: loopback, приватные, неразрешимые адреса и схемы кроме http/https отвергаются |
-| `render_mode` | нет | `page` (по умолчанию) или `widget` — см. ниже |
+| `render_mode` | нет | `page` (по умолчанию, если поля нет или оно `null`) или `widget` — см. ниже |
 | `action` | нет | только для `recaptcha_v3`, по умолчанию `submit` |
 
 ### `render_mode`
