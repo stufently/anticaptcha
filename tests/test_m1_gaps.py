@@ -414,8 +414,10 @@ def test_D3_killpg_reaches_grandchildren(tmp_path):
     assert elapsed < 2, f"reaping took {elapsed:.2f}s: the grandchild kept the pipes open"
 
 
-def test_D3_no_killpg_after_leader_reaped(monkeypatch):
-    """A reaped leader's PID may already name someone else's process group."""
+def test_D3_killpg_after_leader_reaped(monkeypatch):
+    """The group must be killed with the leader's PID even once asyncio reaped
+    it: while a descendant is in that group the PID cannot name anyone else's,
+    and the descendant holding the pipes is exactly what has to die (M2d)."""
     from workers.classifiers import vision_llm
 
     killed_groups = []
@@ -424,10 +426,12 @@ def test_D3_no_killpg_after_leader_reaped(monkeypatch):
     reaped = FakeProcess(returncode=0)
     reaped.pid = 4242
     asyncio.run(vision_llm._reap(reaped))
-    assert killed_groups == [], "killpg must not target a PID that was already reaped"
+    assert killed_groups == [4242], (
+        "a reaped leader's group must still be killed: its descendant keeps the pipes open"
+    )
 
     running = FakeProcess()
     running.returncode = None
     running.pid = 4343
     asyncio.run(vision_llm._reap(running))
-    assert killed_groups == [4343], "an unreaped leader's group must be killed"
+    assert killed_groups == [4242, 4343], "an unreaped leader's group must be killed"

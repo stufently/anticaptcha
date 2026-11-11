@@ -264,31 +264,3 @@ class StealthConfig:
             y = random.randint(0, viewport['height'])
             await StealthConfig.human_mouse_move(page, x, y)
             await StealthConfig.human_delay(0.2, 0.5)
-
-
-async def create_stealth_page(browser):
-    """
-    Create a new page with stealth configuration
-    
-    Args:
-        browser: Playwright browser instance
-        
-    Returns:
-        Configured page with stealth patches
-    """
-    # Create new context with realistic settings
-    context = await browser.new_context(
-        viewport={'width': 1920, 'height': 1080},
-        user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        locale='en-US',
-        timezone_id='America/New_York',
-        geolocation={'latitude': 40.7128, 'longitude': -74.0060},
-        permissions=['geolocation'],
-    )
-    
-    page = await context.new_page()
-    
-    # Apply stealth patches
-    await StealthConfig.apply_stealth(page)
-    
-    return page
