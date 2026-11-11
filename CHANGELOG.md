@@ -1,5 +1,49 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- Остановка qwen CLI (`_reap` в `workers/classifiers/vision_llm.py`): группа
+  процессов убивается (`killpg`) и после того, как asyncio собрал лидера.
+  Раньше `killpg` стоял под условием, что лидер ещё не собран, а CLI
+  завершается раньше потомка, унаследовавшего его stdout/stderr: к таймауту
+  `communicate()` (90 с) `returncode` уже выставлен, `killpg` пропускался, и
+  потомок оставался жить — это и было записано в Known limitations 1.1.0.
+  Номер PID лидера служит ID группы, и Linux не выдаёт этот номер новому
+  процессу, пока он используется как PGID/SID хоть одним процессом: пока в
+  группе есть потомок, номер принадлежит нашей группе. На пустой группе
+  `killpg` обычно даёт `ProcessLookupError`, который подавлялся и раньше
+  (оговорка — в Known limitations ниже). Замер
+  (`tests/test_m2d_reap.py` в образе `anticaptcha:m2-accept`, Python 3.11.18):
+  на коде 1.1.0 потомок жив после `_reap` (state `S` в `/proc/<pid>/stat`), на
+  новом коде умирает; asyncio выставляет `returncode` по выходу лидера, не
+  дожидаясь закрытия труб.
+- `tests/test_m2d_reap.py` — 2 теста (R1) на настоящем поддереве процессов:
+  группа убивается после сборки лидера; `_reap` на пустой группе не бросает
+  исключений (тест сначала проверяет, что группа пуста: `killpg(pid, 0)` даёт
+  `ProcessLookupError`, иначе skip с причиной).
+- `tests/test_m2d_reap_contracts.py` — 5 тестов на контракт `_reap`, все
+  сигналы замоканы: группе уходит именно SIGKILL; `PermissionError` от
+  `killpg` не прерывает kill/wait лидера; PID 0 не сигналит группе
+  вызывающего; порядок `killpg` → `kill` → `wait`; ожидание обрывается по
+  `_REAP_TIMEOUT`.
+
+### Removed
+- Мёртвый код с устаревшим User-Agent `Chrome/120`: метод
+  `BrowserManager.new_context` (`app/utils/browser.py`) и функция
+  `create_stealth_page` (`app/utils/stealth.py`) — вызовов нет ни в `app`, ни в
+  `workers`, ни в `tests` (grep). Импорт `BrowserContext` оставлен: аннотация
+  `self._context: Optional[BrowserContext]` у атрибута вычисляется в рантайме,
+  без импорта `BrowserManager.__init__` падал бы с `NameError`.
+
+### Known limitations
+- `_reap` шлёт `killpg` по сохранённому номеру PID лидера. Когда группа
+  целиком умерла и собрана, номер свободен, и Linux может выдать его заново:
+  если до нашего `killpg` его получит новый лидер группы, SIGKILL уйдёт этой
+  чужой группе. Для этого счётчик PID должен обернуться через `pid_max` за
+  время между смертью группы и вызовом `killpg` — окно ничтожное, но не
+  нулевое.
+
 ## [1.1.0] - 2026-11-10
 
 ### Security

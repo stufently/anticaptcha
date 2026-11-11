@@ -122,15 +122,7 @@ class BrowserManager:
             await self._stealth.apply_stealth_async(page)
         
         return page
-    
-    async def new_context(self) -> BrowserContext:
-        """Create a new browser context"""
-        browser = await self.get_browser()
-        return await browser.new_context(
-            viewport={'width': 1920, 'height': 1080},
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        )
-    
+
     async def close(self):
         """Close browser"""
         if self._context:
