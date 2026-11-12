@@ -8,20 +8,23 @@ from playwright.async_api import Error as PlaywrightError
 
 from app.utils.browser import browser_manager
 from app.utils.captcha_solver import BaseSolver
-from workers.classifiers.vision_llm import VisionLLMClassifier
+from workers.classifiers.vision_llm import VisionLLMClassifier, VisionLLMDisabledError
 from workers.solvers.proxy import parse_proxy
 from workers.solvers.url_guard import validate_page_url
 from workers.solvers.widget_page import check_browser_input, install_widget_page
 
 DEADLINE_SECONDS = 75
 MAX_TEXT_ROUNDS = 3
+OUTCOME_WAIT_SECONDS = 10
 MAX_ACTIONS = 4
 ACTION_WAIT_SECONDS = 5
 INVISIBLE_DELAY_SECONDS = 3
 POLL_INTERVAL = 0.2
 MOUSE_UP_SECONDS = 1.0
 _deadline = contextvars.ContextVar('smartcaptcha_deadline', default=None)
+_text_state = contextvars.ContextVar('smartcaptcha_text_state', default=None)
 CHECKBOX_FRAME = 'iframe[data-testid="checkbox-iframe"]'
+ADVANCED_FRAME = 'iframe[data-testid="advanced-iframe"]:visible'
 
 
 async def _bounded(operation):
@@ -67,6 +70,7 @@ class SmartCaptchaSolver(BaseSolver):
         loaded_at = time.monotonic()
         deadline = loaded_at + DEADLINE_SECONDS
         marker = _deadline.set(deadline)
+        text_marker = _text_state.set({'rounds': 0, 'previous_src': None})
         actions = 0
         next_action_at = loaded_at
         executed = False
@@ -129,6 +133,7 @@ class SmartCaptchaSolver(BaseSolver):
                     pass
                 await asyncio.sleep(min(POLL_INTERVAL, max(0, deadline - time.monotonic())))
         finally:
+            _text_state.reset(text_marker)
             _deadline.reset(marker)
         raise RuntimeError(f'SmartCaptcha: no token within {DEADLINE_SECONDS}s')
 
@@ -156,7 +161,7 @@ class SmartCaptchaSolver(BaseSolver):
         }"""))
 
     async def _challenge_kind(self, page) -> Optional[str]:
-        selector = 'iframe[data-testid="advanced-iframe"]'
+        selector = ADVANCED_FRAME
         if not await _bounded(page.locator(selector).first.is_visible()):
             return None
         root = page.frame_locator(selector).first.locator('.AdvancedCaptcha').first
@@ -180,11 +185,16 @@ class SmartCaptchaSolver(BaseSolver):
         if not self.vision_classifier.enabled:
             raise RuntimeError("SmartCaptcha: text challenge needs the vision LLM")
 
-        iframe = page.locator('iframe[data-testid="advanced-iframe"]').first
-        frame = page.frame_locator('iframe[data-testid="advanced-iframe"]').first
+        iframe = page.locator(ADVANCED_FRAME).first
+        frame = page.frame_locator(ADVANCED_FRAME).first
         image = frame.locator('.AdvancedCaptcha-View img').first
         hint = frame.locator('.Textinput-Hint').first
-        previous_src = None
+        # The poll owns this budget, so a renderer error cannot reset it on
+        # re-entry. Context-local state also keeps concurrent solves separate.
+        state = _text_state.get()
+        if state is None:
+            state = {'rounds': 0, 'previous_src': None}
+        previous_src = state['previous_src']
         deadline = _deadline.get()
         if deadline is None:
             deadline = time.monotonic() + DEADLINE_SECONDS
@@ -194,20 +204,30 @@ class SmartCaptchaSolver(BaseSolver):
             return visible, (await _bounded(hint.text_content()) if visible else None)
 
         for round_no in range(MAX_TEXT_ROUNDS):
+            if state['rounds'] >= MAX_TEXT_ROUNDS:
+                break
+            round_no = state['rounds']
             # A visible image can still be loading, or be the rejected image
             # while the widget fetches the replacement asynchronously.
-            await _bounded(image.wait_for(state='visible'))
             while True:
                 if time.monotonic() >= deadline:
                     raise asyncio.TimeoutError
-                src = await _bounded(image.evaluate("""(img, previous) =>
-                    img.complete && img.naturalWidth > 0 && img.src !== previous
-                        ? img.src : null""", previous_src))
-                if src:
-                    break
+                token = await self._read_token(page)
+                if token:
+                    return token
+                if not await _bounded(iframe.is_visible()):
+                    return None
+                if await _bounded(image.is_visible()):
+                    src = await _bounded(image.evaluate("""(img, previous) =>
+                        img.complete && img.naturalWidth > 0 && img.src !== previous
+                            ? img.src : null""", previous_src))
+                    if src:
+                        break
                 await _bounded(asyncio.sleep(POLL_INTERVAL))
-            previous_src = src
             shot = await _bounded(image.screenshot())
+            previous_src = src
+            state['previous_src'] = src
+            state['rounds'] += 1
             try:
                 text = await _bounded(self.vision_classifier.read_text(shot))
             except Exception as exc:
@@ -215,7 +235,7 @@ class SmartCaptchaSolver(BaseSolver):
                 # _poll, rather than refreshing and spending another round.
                 if time.monotonic() >= deadline:
                     raise asyncio.TimeoutError from None
-                if isinstance(exc, RuntimeError) and 'disabled' in str(exc).lower():
+                if isinstance(exc, VisionLLMDisabledError):
                     raise RuntimeError("SmartCaptcha: text challenge needs the vision LLM") from None
                 print(f"SmartCaptcha: text round {round_no + 1}, recognition failed")
                 refresh = frame.locator('button[data-testid="refresh"]').first
@@ -231,7 +251,7 @@ class SmartCaptchaSolver(BaseSolver):
             before_hint = await hint_state()
             await _bounded(frame.locator('button[data-testid="submit"]').first.click())
 
-            outcome_deadline = time.monotonic() + 10
+            outcome_deadline = time.monotonic() + OUTCOME_WAIT_SECONDS
             while time.monotonic() < outcome_deadline:
                 if time.monotonic() >= deadline:
                     raise asyncio.TimeoutError
@@ -248,4 +268,4 @@ class SmartCaptchaSolver(BaseSolver):
 
         if time.monotonic() >= deadline:
             raise asyncio.TimeoutError
-        raise RuntimeError("SmartCaptcha: text challenge not solved in 3 rounds")
+        raise RuntimeError(f"SmartCaptcha: text challenge not solved in {MAX_TEXT_ROUNDS} rounds")

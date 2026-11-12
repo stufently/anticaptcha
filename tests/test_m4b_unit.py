@@ -203,7 +203,7 @@ def test_T4_normalize(widget):
 
 @pytest.mark.parametrize('enabled', [True, False])
 def test_T5_llm_disabled(widget, enabled):
-    classifier = StubClassifier([RuntimeError('Vision LLM is disabled (no API key)')])
+    classifier = StubClassifier([vision_llm.VisionLLMDisabledError('Vision LLM is disabled (no API key)')])
     classifier.enabled = enabled
     with pytest.raises(RuntimeError, match='needs the vision LLM'):
         widget(classifier, ['парус'])

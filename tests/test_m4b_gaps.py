@@ -3,13 +3,17 @@ import asyncio
 import io
 import json
 import time
+from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from PIL import Image
+from playwright.async_api import Error as PlaywrightError, Locator
 
 from app.utils.browser import BrowserManager
-from test_m4b_unit import MARKER, PROVIDER, TOKEN, StubClassifier
+from test_m4b_unit import MARKER, PROVIDER, TOKEN, StubClassifier, vision
+from workers.classifiers import vision_llm
 from workers.solvers import smartcaptcha
 
 # The M4a widget script, plus two messages the suggested scenarios need:
@@ -64,6 +68,20 @@ HEAD = """<!doctype html><meta charset="utf-8">
 """
 
 BODIES = {
+    'late-token': HEAD + """
+ document.querySelector('[data-testid="submit"]').onclick = () => {
+   parent.postMessage('submit', '*');
+   setTimeout(() => parent.postMessage('token', '*'), TOKEN_DELAY);
+ };
+</script>""",
+    'hint-then-hide': HEAD + """
+ document.querySelector('[data-testid="submit"]').onclick = () => {
+   parent.postMessage('submit', '*');
+   hint.textContent = 'Попробуйте ещё раз'; hint.style.display = 'block';
+   setTimeout(() => parent.postMessage('hide', '*'), 500);
+   setTimeout(() => parent.postMessage('token', '*'), TOKEN_DELAY);
+ };
+</script>""",
     # Submit changes nothing at all: no token, no hint, no new image. The only
     # way out of the outcome window is its own bound.
     'silent': HEAD + """
@@ -126,7 +144,7 @@ BODIES = {
 def fake_yandex(monkeypatch):
     def run(classifier, *, mode='standard', expected=('парус', 'парус', 'парус'),
             success_delay=0, token_delay=0, deadline=None, max_rounds=None,
-            broken_image=False):
+            broken_image=False, configure=None, reuse_solver=None):
         stats = {}
 
         async def scenario():
@@ -179,8 +197,18 @@ def fake_yandex(monkeypatch):
 
             monkeypatch.setattr(manager, 'new_page', routed_page)
             monkeypatch.setattr(manager, 'close_page', capture_and_close)
-            solver = smartcaptcha.SmartCaptchaSolver()
+            solver = reuse_solver or smartcaptcha.SmartCaptchaSolver()
             solver.vision_classifier = classifier
+            if configure is not None:
+                configure(solver)
+            original_text = solver._solve_text
+
+            async def record_text(page):
+                result = await original_text(page)
+                stats.setdefault('text_returns', []).append((result, time.monotonic()))
+                return result
+
+            monkeypatch.setattr(solver, '_solve_text', record_text)
             original_poll = solver._poll
 
             async def timed_poll(page):
@@ -211,13 +239,14 @@ def test_S1_outcome_window_is_ten_seconds(fake_yandex):
     Nothing happens after submit, so the round ends only when the outcome
     window closes. One round must cost ~10 s, not ~30 s: with a 30 s window the
     poll deadline (15 s) fires first and the task dies with 'no token within
-    15s' instead of 'not solved in 3 rounds'.
+    15s' instead of 'not solved in 1 rounds'.
     """
     classifier = StubClassifier(['ошибка'])
-    with pytest.raises(RuntimeError, match='not solved in 3 rounds'):
+    with pytest.raises(RuntimeError, match='not solved in 1 rounds'):
         fake_yandex(classifier, mode='silent', deadline=15, max_rounds=1)
     elapsed = fake_yandex.stats['elapsed']
-    assert 5.0 <= elapsed < 14.0, elapsed
+    assert 9.0 <= elapsed < 14.0, elapsed
+    assert smartcaptcha.OUTCOME_WAIT_SECONDS == 10
     assert len(classifier.calls) == 1
     assert fake_yandex.stats['submits'] == 1
 
@@ -230,7 +259,7 @@ def test_S2_hint_change_alone_is_a_rejection(fake_yandex):
     at once; without the hint condition it burns the whole 10 s window.
     """
     classifier = StubClassifier(['ошибка'])
-    with pytest.raises(RuntimeError, match='not solved in 3 rounds'):
+    with pytest.raises(RuntimeError, match='not solved in 1 rounds'):
         fake_yandex(classifier, mode='hint-only', deadline=15, max_rounds=1)
     elapsed = fake_yandex.stats['elapsed']
     assert elapsed < 5.0, elapsed
@@ -247,7 +276,7 @@ def test_S3_hint_that_disappears_is_not_a_rejection(fake_yandex):
     """
     classifier = StubClassifier(['ошибка', 'парус'])
     assert fake_yandex(classifier, mode='hint-clears', success_delay=1500,
-                       deadline=8) == {'token': TOKEN}
+                       deadline=8, max_rounds=2) == {'token': TOKEN}
     assert len(classifier.calls) == 2
     assert classifier.calls[0] != classifier.calls[1]
     assert fake_yandex.stats['submits'] == 2
@@ -256,15 +285,16 @@ def test_S3_hint_that_disappears_is_not_a_rejection(fake_yandex):
 def test_S4_hidden_iframe_without_token_returns_to_poll(fake_yandex):
     """Kills OC04 (hidden advanced-iframe no longer returns None).
 
-    The iframe hides without a token and the token appears on the main page
-    11 s later, i.e. after the outcome window closed. _solve_text must hand
-    control back to _poll, which then reads the token; a solver that stays in
-    the round loop waits for a visible image inside a hidden iframe until the
-    deadline and fails the task.
+    The iframe hides without a token. _solve_text must immediately return
+    None to _poll, before a token appears 1.5 s later. Reading the token from
+    inside the outcome loop instead would also solve, but violate handoff.
     """
     classifier = StubClassifier(['ошибка'])
-    assert fake_yandex(classifier, mode='hide-no-token', token_delay=11000,
-                       deadline=16) == {'token': TOKEN}
+    assert fake_yandex(classifier, mode='hide-no-token', token_delay=1500,
+                       deadline=4) == {'token': TOKEN}
+    result, returned_at = fake_yandex.stats['text_returns'][0]
+    assert result is None
+    assert returned_at - fake_yandex.stats['poll_started_at'] < 2
     assert len(classifier.calls) == 1
     assert fake_yandex.stats['submits'] == 1
 
@@ -323,3 +353,159 @@ def test_S7_recognition_failure_log_has_no_exception_text(fake_yandex, capfd):
     captured = capfd.readouterr()
     assert MARKER not in captured.out + captured.err
     assert 'парус' not in captured.out + captured.err
+
+
+def test_late_token_while_waiting_for_new_image(fake_yandex):
+    classifier = StubClassifier(['парус'])
+    assert fake_yandex(classifier, mode='late-token', token_delay=11000,
+                       deadline=14) == {'token': TOKEN}
+    assert len(classifier.calls) == 1
+    assert fake_yandex.stats['submits'] == 1
+
+
+def test_hidden_iframe_while_waiting_for_new_image(fake_yandex):
+    classifier = StubClassifier(['ошибка'])
+    assert fake_yandex(classifier, mode='hint-then-hide', token_delay=1500,
+                       deadline=4) == {'token': TOKEN}
+    assert fake_yandex.stats['text_returns'][0][0] is None
+    assert len(classifier.calls) == 1
+
+
+def test_round_budget_survives_playwright_reentry(fake_yandex, monkeypatch):
+    screenshot = Locator.screenshot
+    shots = []
+
+    async def transient_failure(locator, **kwargs):
+        shots.append(locator)
+        if len(shots) == 3:
+            raise PlaywrightError('frame temporarily replaced')
+        return await screenshot(locator, **kwargs)
+
+    monkeypatch.setattr(Locator, 'screenshot', transient_failure)
+    classifier = StubClassifier(['ошибка'] * 8)
+    with pytest.raises(RuntimeError, match='not solved in 3 rounds'):
+        fake_yandex(classifier, deadline=12)
+    assert len(shots) == 4, 'the interrupted third screenshot must be retried'
+    assert len(classifier.calls) == 3
+    assert fake_yandex.stats['submits'] == 3
+
+
+def test_round_budget_resets_for_next_solve(fake_yandex):
+    solver = smartcaptcha.SmartCaptchaSolver()
+    classifier = StubClassifier(['ошибка'] * 3)
+    with pytest.raises(RuntimeError, match='not solved in 3 rounds'):
+        fake_yandex(classifier, reuse_solver=solver, deadline=8)
+    assert len(classifier.calls) == 3
+    classifier = StubClassifier(['парус'])
+    assert fake_yandex(classifier, reuse_solver=solver, deadline=4) == {'token': TOKEN}
+    assert len(classifier.calls) == 1
+
+
+@pytest.mark.parametrize('kind', ['text', 'silhouette', 'unknown'])
+def test_visible_second_advanced_iframe(kind, monkeypatch):
+    monkeypatch.setattr(smartcaptcha, 'DEADLINE_SECONDS', 3)
+
+    async def run():
+        manager = BrowserManager()
+        try:
+            page = await manager.new_page(stealth=False)
+            modifier = {'text': '_image', 'silhouette': '_silhouette'}.get(kind, '')
+            await page.set_content('''<input name="smart-token" type="hidden">
+                <iframe data-testid="advanced-iframe" style="display:none"
+                  srcdoc='<div class="AdvancedCaptcha AdvancedCaptcha_image"></div>'></iframe>
+                <iframe data-testid="advanced-iframe"
+                  srcdoc='<div class="AdvancedCaptcha AdvancedCaptcha''' + modifier + '''"></div>'></iframe>''')
+            solver = smartcaptcha.SmartCaptchaSolver()
+            await page.frame_locator('iframe').nth(1).locator('.AdvancedCaptcha').wait_for(state='attached')
+            assert await solver._challenge_kind(page) == kind
+            if kind == 'text':
+                # The text solver must choose the same visible frame too.
+                await page.frame_locator('iframe').nth(1).locator('body').evaluate('''body => {
+                    body.innerHTML += '<div class="AdvancedCaptcha-View"><img width="248" height="81"></div>' +
+                      '<input name="rep"><button data-testid="submit">Submit</button>';
+                    const canvas = document.createElement('canvas'); canvas.width=248; canvas.height=81;
+                    canvas.getContext('2d').fillRect(0, 0, 248, 81);
+                    body.querySelector('img').src = canvas.toDataURL();
+                    body.querySelector('button').onclick = () => {
+                      parent.document.querySelector('input[name="smart-token"]').value = 'visible-token';
+                    };
+                }''')
+                solver.vision_classifier = StubClassifier(['парус'])
+                assert await solver._solve_text(page) == 'visible-token'
+        finally:
+            await manager.close()
+
+    asyncio.run(run())
+
+
+def test_disabled_word_in_cli_error_is_retryable(fake_yandex):
+    classifier = StubClassifier([RuntimeError('qwen tool disabled temporarily'), 'парус'])
+    assert fake_yandex(classifier, deadline=4) == {'token': TOKEN}
+    assert fake_yandex.stats['refreshes'] == 1
+    assert len(classifier.calls) == 2
+
+
+def test_disabled_exception_has_own_type(vision):
+    vision.enabled = False
+    assert issubclass(vision_llm.VisionLLMDisabledError, RuntimeError)
+    with pytest.raises(vision_llm.VisionLLMDisabledError,
+                       match=r'^Vision LLM is disabled \(no API key\)$'):
+        asyncio.run(vision.read_text(b'image'))
+
+
+def test_concurrent_cli_calls_keep_their_own_schema(vision, monkeypatch):
+    paths = []
+
+    async def run():
+        both_started = asyncio.Event()
+
+        async def spawn(*argv, **kwargs):
+            path = Path(argv[argv.index('--json-schema') + 1][1:])
+            paths.append(path)
+            if len(paths) == 2:
+                both_started.set()
+            await both_started.wait()
+            schema = json.loads(path.read_text())
+            result = {'text': 'парус'} if 'text' in schema['properties'] else {'indices': [0]}
+
+            async def communicate():
+                assert path.exists(), 'CLI must keep access to its schema until completion'
+                return json.dumps({'type': 'result', 'structured_result': result}).encode(), b''
+
+            return SimpleNamespace(communicate=communicate, returncode=0)
+
+        monkeypatch.setattr(asyncio, 'create_subprocess_exec', spawn)
+        return await asyncio.wait_for(asyncio.gather(
+            vision.read_text(b'image'), vision.classify_tiles(b'image', 'bicycles')), 3)
+
+    assert asyncio.run(run()) == ['парус', [0]]
+    assert len(set(paths)) == 2
+    assert all(not path.exists() for path in paths)
+    assert list(vision.temp_dir.iterdir()) == []
+
+
+@pytest.mark.parametrize('cancelled', [False, True])
+def test_schema_cleanup_on_error_and_cancellation(vision, monkeypatch, cancelled):
+    paths = []
+    killed = []
+
+    async def spawn(*argv, **kwargs):
+        paths.append(Path(argv[argv.index('--json-schema') + 1][1:]))
+        assert paths[-1].exists()
+        if not cancelled:
+            raise FileNotFoundError('CLI not installed')
+
+        async def communicate():
+            raise asyncio.CancelledError
+
+        async def wait():
+            pass
+
+        return SimpleNamespace(communicate=communicate, kill=lambda: killed.append(True), wait=wait)
+
+    monkeypatch.setattr(asyncio, 'create_subprocess_exec', spawn)
+    with pytest.raises(asyncio.CancelledError if cancelled else RuntimeError):
+        asyncio.run(vision.read_text(b'image'))
+    assert paths and all(not path.exists() for path in paths)
+    assert list(vision.temp_dir.iterdir()) == []
+    assert bool(killed) == cancelled

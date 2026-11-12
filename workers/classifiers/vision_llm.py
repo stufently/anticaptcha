@@ -58,6 +58,10 @@ _REAP_TIMEOUT = 5.0
 TEXT_PROMPT = "Transcribe the Russian (Cyrillic) words in the CAPTCHA image exactly, letter by letter, in reading order along the curved baseline. Do not translate, do not autocorrect, keep original case, separate words with single spaces. Put only the transcription into the text field."
 
 
+class VisionLLMDisabledError(RuntimeError):
+    """Recognition is unavailable because the classifier has no API key."""
+
+
 async def _reap(process) -> None:
     """Kill the qwen CLI with its whole process group, then reap it, bounded."""
     pid = getattr(process, "pid", None)
@@ -141,7 +145,7 @@ class VisionLLMClassifier:
         """
         # Check if Vision LLM is enabled
         if not self.enabled:
-            raise RuntimeError("Vision LLM is disabled (no API key)")
+            raise VisionLLMDisabledError("Vision LLM is disabled (no API key)")
         
         # 1. Сохраняем изображение во временный файл с уникальным именем
         unique_id = str(uuid.uuid4())[:8]
@@ -167,7 +171,7 @@ class VisionLLMClassifier:
     async def read_text(self, image_bytes: bytes) -> str:
         """Transcribe a text challenge without logging the model's answer."""
         if not self.enabled:
-            raise RuntimeError("Vision LLM is disabled (no API key)")
+            raise VisionLLMDisabledError("Vision LLM is disabled (no API key)")
         image_path = self.temp_dir / f"captcha_{uuid.uuid4().hex[:8]}.png"
         schema = {
             "type": "object",
@@ -224,9 +228,9 @@ JSON response:"""
         инструментов у модели нет: содержимое страницы считается враждебным.
         """
         custom_schema = schema is not None
+        schema_file = self.temp_dir / f"schema_{uuid.uuid4().hex}.json"
         try:
             # Создаем JSON schema для структурированного ответа
-            schema_file = self.temp_dir / "schema.json"
             schema = schema if custom_schema else {
                 "type": "object",
                 "properties": {
@@ -424,6 +428,8 @@ JSON response:"""
         except Exception as e:
             print(f"❌ qwen call failed: {e}")
             raise RuntimeError(f"Vision LLM classification failed: {e}")
+        finally:
+            schema_file.unlink(missing_ok=True)
 
     async def _fallback_classify(self, image_path: Path, prompt: str) -> str:
         """
