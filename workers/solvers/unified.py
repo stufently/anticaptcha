@@ -2,7 +2,6 @@
 
 Provides a single interface for solving different types of CAPTCHA:
 - Google reCAPTCHA v2/v3
-- Yandex CAPTCHA / SmartCaptcha
 - hCaptcha
 - Cloudflare Turnstile
 - VK Captcha
@@ -66,7 +65,6 @@ class UnifiedCaptchaSolver:
         """Register all available solvers"""
         from workers.solvers.recaptcha import RecaptchaV2Solver
         from workers.solvers.recaptcha_v3 import RecaptchaV3Solver
-        from workers.solvers.yandex import YandexCaptchaSolver, YandexSmartCaptchaSolver
         from workers.solvers.hcaptcha import HcaptchaSolver
         from workers.solvers.cloudflare import CloudflareTurnstileSolver
         from workers.solvers.vk import VKCaptchaSolver
@@ -97,15 +95,6 @@ class UnifiedCaptchaSolver:
         recaptcha_v3_solver = RecaptchaV3Solver()
         recaptcha_v3_solver.vision_classifier = self.vision_classifier
         SolverRegistry.register(CAPTCHAType.RECAPTCHA_V3, recaptcha_v3_solver)
-
-        # Yandex
-        yandex_solver = YandexCaptchaSolver()
-        yandex_solver.vision_classifier = self.vision_classifier
-        SolverRegistry.register(CAPTCHAType.YANDEX_CAPTCHA, yandex_solver)
-
-        yandex_smart_solver = YandexSmartCaptchaSolver()
-        yandex_smart_solver.vision_classifier = self.vision_classifier
-        SolverRegistry.register(CAPTCHAType.YANDEX_SMART, yandex_smart_solver)
 
         # Cloudflare
         hcaptcha_solver = HcaptchaSolver()
@@ -320,8 +309,6 @@ if __name__ == "__main__":
     for type_name in [
         CAPTCHAType.RECAPTCHA_V2,
         CAPTCHAType.RECAPTCHA_V3,
-        CAPTCHAType.YANDEX_CAPTCHA,
-        CAPTCHAType.YANDEX_SMART,
         CAPTCHAType.HCAPTCHA,
         CAPTCHAType.CLOUDFLARE_TURNSTILE,
         CAPTCHAType.VK_CAPTCHA,

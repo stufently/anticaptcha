@@ -221,12 +221,9 @@ class TestSolversImport:
         assert solver is not None
 
     def test_import_yandex(self):
-        """Test importing YandexCaptchaSolver"""
-        from workers.solvers.yandex import YandexCaptchaSolver, YandexSmartCaptchaSolver
-        solver1 = YandexCaptchaSolver()
-        solver2 = YandexSmartCaptchaSolver()
-        assert solver1 is not None
-        assert solver2 is not None
+        """Test importing the worker's SmartCaptcha solver"""
+        from workers.solvers.smartcaptcha import SmartCaptchaSolver
+        assert SmartCaptchaSolver() is not None
 
     def test_import_vk(self):
         """Test importing VKCaptchaSolver"""
@@ -320,15 +317,13 @@ class TestAllSolversRegistration:
 
     @pytest.mark.asyncio
     async def test_all_solvers_registered(self):
-        """Test all 12 solvers are registered"""
+        """Test the supported unified solvers are registered"""
         solver = UnifiedCaptchaSolver()
         await solver.setup()
 
         expected_types = [
             CAPTCHAType.RECAPTCHA_V2,
             CAPTCHAType.RECAPTCHA_V3,
-            CAPTCHAType.YANDEX_CAPTCHA,
-            CAPTCHAType.YANDEX_SMART,
             CAPTCHAType.HCAPTCHA,
             CAPTCHAType.CLOUDFLARE_TURNSTILE,
             CAPTCHAType.VK_CAPTCHA,

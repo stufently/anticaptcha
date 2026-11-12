@@ -33,6 +33,10 @@ _PAGE = """<!doctype html>
 
 # task type -> (provider script, widget container), both with a {site_key} slot
 _WIDGETS: Dict[str, Tuple[str, str]] = {
+    "yandex_smartcaptcha": (
+        "https://smartcaptcha.yandexcloud.net/captcha.js",
+        '<div class="smart-captcha" data-sitekey="{site_key}"></div>',
+    ),
     "turnstile": (
         "https://challenges.cloudflare.com/turnstile/v0/api.js",
         '<div class="cf-turnstile" data-sitekey="{site_key}"></div>',

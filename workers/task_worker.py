@@ -18,6 +18,7 @@ from workers.solvers.recaptcha import RecaptchaV2Solver, RecaptchaV3Solver
 from workers.solvers.hcaptcha import HcaptchaSolver
 from workers.solvers.image_text import ImageTextSolver
 from workers.solvers.turnstile import TurnstileSolver
+from workers.solvers.smartcaptcha import SmartCaptchaSolver
 
 
 # Solver registry
@@ -27,6 +28,7 @@ SOLVERS = {
     "hcaptcha": HcaptchaSolver,
     "image_text": ImageTextSolver,
     "turnstile": TurnstileSolver,
+    "yandex_smartcaptcha": SmartCaptchaSolver,
 }
 
 
@@ -35,6 +37,18 @@ RESTART_ERROR = "worker restarted while processing the task"
 # Strings up to this length are useful in a log (an image_text answer); longer
 # ones are tokens or cookies, and the worker log is not a secret store.
 REDACT_MAX_VISIBLE = 16
+
+
+def _strip_proxy(raw: str) -> str:
+    """Remove client proxy credentials when a persisted task becomes terminal."""
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return raw
+    if not isinstance(data, dict) or 'proxy' not in data:
+        return raw
+    del data['proxy']
+    return json.dumps(data)
 
 
 def _redact_value(value: Any) -> Any:
@@ -126,6 +140,7 @@ class TaskWorker:
             task.status = "solved"
             task.result = json.dumps(result)
             task.solved_at = datetime.utcnow()
+            task.input_data = _strip_proxy(task.input_data)
             db.commit()
             
             print(f"✅ Task {task.id} solved: {_redact(result)}")
@@ -135,6 +150,7 @@ class TaskWorker:
             task.status = "failed"
             task.error_message = str(e)
             task.retries += 1
+            task.input_data = _strip_proxy(task.input_data)
             db.commit()
             
             print(f"❌ Task {task.id} failed: {e}")
@@ -177,6 +193,7 @@ class TaskWorker:
             for task in stuck:
                 task.status = "failed"
                 task.error_message = RESTART_ERROR
+                task.input_data = _strip_proxy(task.input_data)
                 print(f"❌ Task {task.id} failed: {RESTART_ERROR}", flush=True)
             db.commit()
             return len(stuck)

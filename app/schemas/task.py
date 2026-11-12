@@ -12,6 +12,7 @@ class TaskType(str, Enum):
     HCAPTCHA = "hcaptcha"
     IMAGE_TEXT = "image_text"
     TURNSTILE = "turnstile"
+    YANDEX_SMARTCAPTCHA = "yandex_smartcaptcha"
 
 
 class TaskStatus(str, Enum):

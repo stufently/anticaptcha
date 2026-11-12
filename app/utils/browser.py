@@ -19,6 +19,7 @@ class BrowserManager:
         self._playwright = None
         self._browser: Optional[Browser] = None
         self._context: Optional[BrowserContext] = None
+        self._proxy_contexts = {}
         self._stealth = Stealth(navigator_platform_override="Linux x86_64", webgl_vendor_override="Google Inc. (Intel)", webgl_renderer_override="ANGLE (Intel, Mesa Intel(R) UHD Graphics 620 (KBL GT2), OpenGL 4.6)") if HAS_STEALTH else None
         self._lock = asyncio.Lock()
 
@@ -105,23 +106,46 @@ class BrowserManager:
                 flush=True,
             )
     
-    async def new_page(self, stealth: bool = True) -> Page:
+    async def new_page(self, stealth: bool = True, proxy: Optional[dict] = None) -> Page:
         """
         Create a new page with optional stealth configuration
         
         Args:
             stealth: Whether to apply stealth patches (default: True)
+            proxy: Optional proxy in a dedicated, page-owned context
             
         Returns:
             Configured page
         """
         browser = await self.get_browser()
-        page = await browser.new_page()
+        if proxy is not None:
+            context = await browser.new_context(proxy=proxy)
+            try:
+                page = await context.new_page()
+            except (Exception, asyncio.CancelledError):
+                await context.close()
+                raise
+            self._proxy_contexts[id(page)] = context
+        else:
+            page = await browser.new_page()
         
-        if stealth and HAS_STEALTH and self._stealth:
-            await self._stealth.apply_stealth_async(page)
+        try:
+            if stealth and HAS_STEALTH and self._stealth:
+                await self._stealth.apply_stealth_async(page)
+        except (Exception, asyncio.CancelledError):
+            await self.close_page(page)
+            raise
         
         return page
+
+    async def close_page(self, page):
+        """Close the page and only the explicit proxy context we own for it."""
+        context = self._proxy_contexts.pop(id(page), None)
+        try:
+            await page.close()
+        finally:
+            if context is not None:
+                await context.close()
 
     async def close(self):
         """Close browser"""
@@ -132,6 +156,7 @@ class BrowserManager:
         if self._browser:
             await self._browser.close()
             self._browser = None
+        self._proxy_contexts.clear()
         
         if self._playwright:
             await self._playwright.stop()
