@@ -17,6 +17,7 @@ MAX_ACTIONS = 4
 ACTION_WAIT_SECONDS = 5
 INVISIBLE_DELAY_SECONDS = 3
 POLL_INTERVAL = 0.2
+MOUSE_UP_SECONDS = 1.0
 _deadline = contextvars.ContextVar('smartcaptcha_deadline', default=None)
 CHECKBOX_FRAME = 'iframe[data-testid="checkbox-iframe"]'
 
@@ -134,9 +135,10 @@ class SmartCaptchaSolver(BaseSolver):
             await _within_action(page.mouse.down(), deadline)
             await _within_action(page.mouse.move(track['x'] + track['width'] - 1, y, steps=15), deadline)
         finally:
-            # Release even when the gesture budget is spent: a button left down
-            # would turn every later click on the page into a drag.
-            await _bounded(page.mouse.up())
+            # Release even when the gesture budget is spent (a button left down
+            # turns later clicks into a drag), but with its own short bound so a
+            # stalled release cannot delay reading an already issued token.
+            await asyncio.wait_for(page.mouse.up(), MOUSE_UP_SECONDS)
 
     async def _read_token(self, page) -> Optional[str]:
         return await _bounded(page.evaluate("""() => {

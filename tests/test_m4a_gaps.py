@@ -505,3 +505,31 @@ def test_process_task_without_proxy_stays_solved(tmp_path, monkeypatch):
             db.close()
             engine.dispose()
     asyncio.run(run())
+
+
+def test_stalled_mouse_up_is_bounded_and_always_attempted(monkeypatch):
+    """The release runs even after the drag stalls, but cannot hold the poll."""
+    monkeypatch.setattr(smartcaptcha, 'DEADLINE_SECONDS', 10)
+    monkeypatch.setattr(smartcaptcha, 'ACTION_WAIT_SECONDS', 0.1)
+    monkeypatch.setattr(smartcaptcha, 'MOUSE_UP_SECONDS', 0.2)
+    page = _ActionPage('slider', token_after_action=True)
+    released = []
+
+    async def fast(*args, **kwargs):
+        if page.action_started is None:
+            page.action_started = time.monotonic()
+
+    async def stalled_move(*args, **kwargs):
+        if page.action_started is not None:
+            await asyncio.Event().wait()
+        page.action_started = time.monotonic()
+
+    async def stalled_up(*args, **kwargs):
+        released.append(time.monotonic())
+        await asyncio.Event().wait()
+
+    page.mouse = SimpleNamespace(move=stalled_move, down=fast, up=stalled_up)
+    start = time.monotonic()
+    assert asyncio.run(smartcaptcha.SmartCaptchaSolver()._poll(page)) == TOKEN
+    assert released, 'mouse.up was not attempted after a stalled drag'
+    assert time.monotonic() - start < 1.0
