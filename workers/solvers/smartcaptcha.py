@@ -13,6 +13,9 @@ from workers.solvers.url_guard import validate_page_url
 from workers.solvers.widget_page import check_browser_input, install_widget_page
 
 DEADLINE_SECONDS = 60
+MAX_ACTIONS = 4
+ACTION_WAIT_SECONDS = 5
+INVISIBLE_DELAY_SECONDS = 3
 POLL_INTERVAL = 0.2
 _deadline = contextvars.ContextVar('smartcaptcha_deadline', default=None)
 CHECKBOX_FRAME = 'iframe[data-testid="checkbox-iframe"]'
@@ -48,9 +51,12 @@ class SmartCaptchaSolver(BaseSolver):
             await browser_manager.close_page(page)
 
     async def _poll(self, page) -> str:
-        deadline = time.monotonic() + DEADLINE_SECONDS
+        loaded_at = time.monotonic()
+        deadline = loaded_at + DEADLINE_SECONDS
         marker = _deadline.set(deadline)
-        dragged = clicked = executed = False
+        actions = 0
+        next_action_at = loaded_at
+        executed = False
         try:
             while time.monotonic() < deadline:
                 try:
@@ -66,7 +72,7 @@ class SmartCaptchaSolver(BaseSolver):
                         break
                     has_checkbox = bool(await _bounded(page.locator(CHECKBOX_FRAME).count()))
                     if not has_checkbox:
-                        if not executed:
+                        if not executed and time.monotonic() - loaded_at >= INVISIBLE_DELAY_SECONDS:
                             executed = await _bounded(page.evaluate("""() => {
                                 if (window.smartCaptcha && typeof window.smartCaptcha.execute === 'function') {
                                     window.smartCaptcha.execute();
@@ -76,25 +82,37 @@ class SmartCaptchaSolver(BaseSolver):
                             }"""))
                         await asyncio.sleep(POLL_INTERVAL)
                         continue
+                    # Keep polling tokens/challenges while the widget processes
+                    # the last gesture. Both kinds of gesture share one budget.
+                    if actions >= MAX_ACTIONS or time.monotonic() < next_action_at:
+                        await asyncio.sleep(min(POLL_INTERVAL, max(0, deadline - time.monotonic())))
+                        continue
                     frame = page.frame_locator(CHECKBOX_FRAME).first
                     thumb = frame.locator('.SliderCaptcha [data-testid="thumb"]').first
-                    if not dragged and await _bounded(thumb.is_visible()):
+                    if await _bounded(thumb.is_visible()):
                         await _bounded(thumb.scroll_into_view_if_needed())
                         start = await _bounded(thumb.bounding_box())
                         track = await _bounded(frame.locator('.SliderCaptcha').first.bounding_box())
                         if start and track:
                             x, y = start['x'] + start['width'] / 2, start['y'] + start['height'] / 2
                             await _bounded(page.mouse.move(x, y))
-                            await _bounded(page.mouse.down())
+                            actions += 1
                             try:
-                                await _bounded(page.mouse.move(track['x'] + track['width'] - 1, y, steps=15))
+                                await _bounded(page.mouse.down())
+                                try:
+                                    await _bounded(page.mouse.move(track['x'] + track['width'] - 1, y, steps=15))
+                                finally:
+                                    await _bounded(page.mouse.up())
                             finally:
-                                await _bounded(page.mouse.up())
-                            dragged = True
-                    button = frame.locator('#js-button').first
-                    if not clicked and await _bounded(button.is_visible()):
-                        await _bounded(button.click())
-                        clicked = True
+                                next_action_at = time.monotonic() + ACTION_WAIT_SECONDS
+                    else:
+                        button = frame.locator('#js-button').first
+                        if await _bounded(button.is_visible()):
+                            actions += 1
+                            try:
+                                await _bounded(button.click())
+                            finally:
+                                next_action_at = time.monotonic() + ACTION_WAIT_SECONDS
                 except (asyncio.TimeoutError, PlaywrightError):
                     # A loading/replaced frame can race a lookup; a stalled
                     # renderer consumes the remaining deadline and ends here.

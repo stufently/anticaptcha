@@ -23,27 +23,41 @@ PROVIDER = "https://smartcaptcha.yandexcloud.net/"
 
 SCRIPT = """(() => {
  const kind = new URL(location.href).searchParams.get('scenario') || 'checkbox';
+ const loadedAt = performance.timeOrigin;
+ window.widgetStats = {clicks: [], drags: [], executes: [], initialToken: null};
  const container = document.querySelector('.smart-captcha');
  container.dataset.testid = 'smartCaptcha-container';
  const input = document.createElement('input');
  input.type = 'hidden'; input.name = 'smart-token'; container.append(input);
  const issue = () => { input.value = TOKEN; };
+ window.widgetStats.initialToken = input.value;
  window.smartCaptcha = { getResponse: () => input.value,
-   execute: () => { if (kind === 'invisible') issue(); } };
+   execute: () => {
+     const elapsed = performance.timeOrigin + performance.now() - loadedAt;
+     window.widgetStats.executes.push(elapsed);
+     if (kind === 'invisible' && elapsed >= 3000) issue();
+   } };
  function frame(testid, scenario) {
    const el = document.createElement('iframe'); el.dataset.testid = testid;
    el.src = PROVIDER + 'frame?scenario=' + scenario;
    el.width = 400; el.height = 160; container.append(el);
  }
- if (kind !== 'invisible' && kind !== 'hung') frame('checkbox-iframe', kind);
+ if (kind === 'late-checkbox') setTimeout(() => frame('checkbox-iframe', kind), 1000);
+ else if (kind !== 'invisible' && kind !== 'hung') frame('checkbox-iframe', kind);
  window.addEventListener('message', event => {
    if (event.origin !== new URL(PROVIDER).origin) return;
    if (event.data === 'clicked') {
+     const elapsed = performance.timeOrigin + performance.now() - loadedAt;
+     window.widgetStats.clicks.push(elapsed);
      if (kind === 'text' || kind === 'silhouette' || kind === 'unknown')
        frame('advanced-iframe', kind + '-challenge');
-     else if (kind === 'checkbox') issue();
+     else if (kind === 'checkbox' && elapsed >= 1500) issue();
+     else if (kind === 'late-checkbox') issue();
    }
-   if (event.data === 'dragged' && kind === 'slider') issue();
+   if (event.data === 'dragged') {
+     window.widgetStats.drags.push(performance.now());
+     if (kind === 'slider') issue();
+   }
  });
  if (kind === 'hung') setTimeout(() => { while (true) {} }, 500);
 })();"""
@@ -72,7 +86,12 @@ async def fake_provider(route):
         };
         </script>"""
     else:
-        body = '<button id="js-button" role="checkbox" onclick="parent.postMessage(\'clicked\', \'*\')">Check</button>'
+        body = """<button id="js-button" role="checkbox">Check</button><script>
+        window.clickCount = 0;
+        document.querySelector('#js-button').onclick = () => {
+            window.clickCount++; parent.postMessage('clicked', '*');
+        };
+        </script>"""
     await route.fulfill(content_type='text/html', body=body)
 
 
@@ -93,31 +112,74 @@ def offline_browser(monkeypatch):
     return manager
 
 
-def run_widget(manager, scenario):
+def run_widget(manager, scenario, *, stats=None, timeout=12):
     async def run():
         solver = smartcaptcha.SmartCaptchaSolver()
+        close_page = manager.close_page
+
+        async def capture_and_close(page):
+            try:
+                if stats is not None:
+                    stats.update(await page.evaluate('window.widgetStats'))
+                    frame = page.frame_locator('iframe[data-testid="checkbox-iframe"]')
+                    if await page.locator('iframe[data-testid="checkbox-iframe"]').count():
+                        stats['iframe_clicks'] = await frame.locator('body').evaluate('() => window.clickCount')
+            finally:
+                await close_page(page)
+
+        if stats is not None:
+            manager.close_page = capture_and_close
         try:
             return await asyncio.wait_for(solver.solve({
                 'site_key': 'offline-key',
                 'page_url': 'https://example.com/?scenario=' + scenario,
                 'render_mode': 'widget',
-            }), timeout=9)
+            }), timeout=timeout)
         finally:
+            manager.close_page = close_page
             await manager.close()
     return asyncio.run(run())
 
 
-def test_Y1_checkbox(offline_browser, capsys):
-    assert run_widget(offline_browser, 'checkbox') == {'token': TOKEN}
+def test_Y1_checkbox(offline_browser, monkeypatch, capsys):
+    monkeypatch.setattr(smartcaptcha, 'DEADLINE_SECONDS', 8)
+    stats = {}
+    assert run_widget(offline_browser, 'checkbox', stats=stats) == {'token': TOKEN}
+    assert stats['initialToken'] == ''
+    assert len(stats['clicks']) == 2
+    assert stats['clicks'][0] < 1500
+    assert stats['clicks'][1] - stats['clicks'][0] >= 5000
     assert TOKEN not in capsys.readouterr().out
+
+
+def test_Y1b_dead_widget(offline_browser, monkeypatch):
+    monkeypatch.setattr(smartcaptcha, 'DEADLINE_SECONDS', 30)
+    stats = {}
+    with pytest.raises(RuntimeError, match='no token'):
+        run_widget(offline_browser, 'dead', stats=stats, timeout=36)
+    assert stats['iframe_clicks'] == 4
+    assert len(stats['clicks']) == 4
+    assert all(later - earlier >= 5000 for earlier, later in zip(stats['clicks'], stats['clicks'][1:]))
 
 
 def test_Y2_slider(offline_browser):
     assert run_widget(offline_browser, 'slider') == {'token': TOKEN}
 
 
-def test_Y3_invisible(offline_browser):
-    assert run_widget(offline_browser, 'invisible') == {'token': TOKEN}
+def test_Y3_invisible(offline_browser, monkeypatch):
+    monkeypatch.setattr(smartcaptcha, 'DEADLINE_SECONDS', 6)
+    stats = {}
+    assert run_widget(offline_browser, 'invisible', stats=stats) == {'token': TOKEN}
+    assert len(stats['executes']) == 1
+    assert stats['executes'][0] >= 3000
+    assert stats['clicks'] == []
+
+
+def test_Y3_late_checkbox(offline_browser):
+    stats = {}
+    assert run_widget(offline_browser, 'late-checkbox', stats=stats) == {'token': TOKEN}
+    assert stats['executes'] == []
+    assert len(stats['clicks']) == 1
 
 
 def test_Y4_text_challenge(offline_browser):
