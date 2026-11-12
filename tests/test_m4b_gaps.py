@@ -32,7 +32,7 @@ WIDGET = """(() => {
  window.addEventListener('message', event => {
    if (event.origin !== new URL(PROVIDER).origin) return;
    if (event.data === 'clicked') frame('advanced-iframe', 'challenge');
-   if (event.data === 'submit') window.widgetStats.submits++;
+   if (event.data === 'submit') setTimeout(() => window.widgetStats.submits++, STATS_DELAY);
    if (event.data === 'refresh') window.widgetStats.refreshes++;
    if (event.data === 'hide') {
      document.querySelector('iframe[data-testid="advanced-iframe"]').style.display = 'none';
@@ -57,12 +57,18 @@ HEAD = """<!doctype html><meta charset="utf-8">
  const image = document.querySelector('img');
  const hint = document.querySelector('.Textinput-Hint');
  const field = document.querySelector('[name="rep"]');
+ window.frameStats = {submits: 0, refreshes: 0};
+ function recordSubmit() {
+   window.frameStats.submits++;
+   parent.postMessage('submit', '*');
+ }
  let round = 0;
  function refresh() {
    round++;
    setTimeout(() => {image.src = 'load-captchaimg?n=' + round}, 200);
  }
  document.querySelector('[data-testid="refresh"]').onclick = () => {
+   window.frameStats.refreshes++;
    parent.postMessage('refresh', '*'); refresh();
  };
 """
@@ -70,13 +76,13 @@ HEAD = """<!doctype html><meta charset="utf-8">
 BODIES = {
     'late-token': HEAD + """
  document.querySelector('[data-testid="submit"]').onclick = () => {
-   parent.postMessage('submit', '*');
+   recordSubmit();
    setTimeout(() => parent.postMessage('token', '*'), TOKEN_DELAY);
  };
 </script>""",
     'hint-then-hide': HEAD + """
  document.querySelector('[data-testid="submit"]').onclick = () => {
-   parent.postMessage('submit', '*');
+   recordSubmit();
    hint.textContent = 'Попробуйте ещё раз'; hint.style.display = 'block';
    setTimeout(() => parent.postMessage('hide', '*'), 500);
    setTimeout(() => parent.postMessage('token', '*'), TOKEN_DELAY);
@@ -86,14 +92,14 @@ BODIES = {
     # way out of the outcome window is its own bound.
     'silent': HEAD + """
  document.querySelector('[data-testid="submit"]').onclick = () => {
-   parent.postMessage('submit', '*');
+   recordSubmit();
  };
 </script>""",
     # Rejection is announced by a NEW hint only, the image src stays put.
     'hint-only': HEAD + """
  let rejects = 0;
  document.querySelector('[data-testid="submit"]').onclick = () => {
-   parent.postMessage('submit', '*');
+   recordSubmit();
    rejects++;
    hint.textContent = 'Попробуйте ещё раз. Вариант ' + rejects;
    hint.style.display = 'block';
@@ -103,7 +109,7 @@ BODIES = {
     # clears the stale hint at once and issues the token 1.5 s later.
     'hint-clears': HEAD + """
  document.querySelector('[data-testid="submit"]').onclick = () => {
-   parent.postMessage('submit', '*');
+   recordSubmit();
    if (field.value === EXPECTED[round]) {
      hint.textContent = '';
      hint.style.display = 'none';
@@ -119,7 +125,7 @@ BODIES = {
     # long after the outcome window has closed.
     'hide-no-token': HEAD + """
  document.querySelector('[data-testid="submit"]').onclick = () => {
-   parent.postMessage('submit', '*');
+   recordSubmit();
    parent.postMessage('hide', '*');
    setTimeout(() => parent.postMessage('token', '*'), TOKEN_DELAY);
  };
@@ -127,7 +133,7 @@ BODIES = {
     # Ordinary challenge, used with an aborted image request.
     'standard': HEAD + """
  document.querySelector('[data-testid="submit"]').onclick = () => {
-   parent.postMessage('submit', '*');
+   recordSubmit();
    if (field.value === EXPECTED[round]) {
      setTimeout(() => parent.postMessage('solved', '*'), SUCCESS_DELAY);
    } else {
@@ -144,7 +150,7 @@ BODIES = {
 def fake_yandex(monkeypatch):
     def run(classifier, *, mode='standard', expected=('парус', 'парус', 'парус'),
             success_delay=0, token_delay=0, deadline=None, max_rounds=None,
-            broken_image=False, configure=None, reuse_solver=None):
+            broken_image=False, configure=None, reuse_solver=None, stats_delay=0):
         stats = {}
 
         async def scenario():
@@ -160,7 +166,8 @@ def fake_yandex(monkeypatch):
                 url = urlsplit(route.request.url)
                 if url.path == '/captcha.js':
                     body = ('const PROVIDER = ' + json.dumps(PROVIDER) +
-                            '; const TOKEN = ' + json.dumps(TOKEN) + ';' + WIDGET)
+                            '; const TOKEN = ' + json.dumps(TOKEN) +
+                            '; const STATS_DELAY = ' + str(stats_delay) + ';' + WIDGET)
                     await route.fulfill(content_type='application/javascript', body=body)
                 elif url.path == '/load-captchaimg':
                     if broken_image:
@@ -192,6 +199,13 @@ def fake_yandex(monkeypatch):
             async def capture_and_close(page):
                 try:
                     stats.update(await page.evaluate('window.widgetStats'))
+                    # Counters belong to the handler that performed the action;
+                    # its postMessage may still be queued on the main page.
+                    frame_stats = [await frame.evaluate('window.frameStats')
+                                   for frame in page.frames if frame.url == PROVIDER + 'challenge']
+                    if frame_stats:
+                        for key in ('submits', 'refreshes'):
+                            stats[key] = sum(item[key] for item in frame_stats)
                 finally:
                     await close_page(page)
 
@@ -260,7 +274,7 @@ def test_S2_hint_change_alone_is_a_rejection(fake_yandex):
     """
     classifier = StubClassifier(['ошибка'])
     with pytest.raises(RuntimeError, match='not solved in 1 rounds'):
-        fake_yandex(classifier, mode='hint-only', deadline=15, max_rounds=1)
+        fake_yandex(classifier, mode='hint-only', deadline=15, max_rounds=1, stats_delay=2000)
     elapsed = fake_yandex.stats['elapsed']
     assert elapsed < 5.0, elapsed
     assert fake_yandex.stats['submits'] == 1
