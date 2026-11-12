@@ -173,6 +173,9 @@ def test_T1_first_round(widget, capfd):
     assert widget(classifier, [answer]) == {'token': TOKEN}
     assert len(classifier.calls) == 1
     assert classifier.calls[0].startswith(b'\x89PNG')
+    with Image.open(io.BytesIO(classifier.calls[0])) as shot:
+        assert shot.size == (248, 81)
+        assert shot.convert('RGB').getextrema() == ((30, 30), (70, 70), (140, 140))
     captured = capfd.readouterr()
     assert MARKER not in captured.out + captured.err
     assert answer not in captured.out + captured.err
