@@ -92,9 +92,15 @@
         (`_silhouette`), иначе `"unknown"`; задание есть → ДОСЛОВНО `await self._solve_challenge(page, kind)`, в M4a
         этот метод поднимает `RuntimeError(f"SmartCaptcha: {kind} challenge is not supported yet")`;
      3. слайдер (`.SliderCaptcha [data-testid="thumb"]` в checkbox-iframe) — протянуть мышью от центра ползунка до
-        правого края `.SliderCaptcha` за несколько шагов, один раз;
-     4. чекбокс (`#js-button` в checkbox-iframe) — клик один раз;
-     5. нет checkbox-iframe, а `window.smartCaptcha` есть — `window.smartCaptcha.execute()` один раз (невидимая).
+        правого края `.SliderCaptcha` за несколько шагов;
+     4. чекбокс (`#js-button` в checkbox-iframe) — клик;
+     5. checkbox-iframe нет уже ≥ 3 с с момента загрузки страницы, а `window.smartCaptcha` есть —
+        `window.smartCaptcha.execute()` один раз (невидимая). Раньше 3 с — не вызывать: виджет ещё рендерится.
+     **Повтор действия (шаги 3–4).** Вживую (ресерч M4a, демка Яндекса) кнопка `#js-button` становится видимой
+     раньше, чем виджет готов: клик через 0,8 с после загрузки молча теряется, клик через 5 с вызывает задание.
+     Поэтому протяжка/клик — не «один раз», а: после действия ждать до 5 с появления токена или
+     advanced-iframe; ничего не появилось — повторить действие; не больше ДОСЛОВНО `MAX_ACTIONS = 4` действий
+     (протяжки и клики вместе) за задачу.
      Дедлайн → `RuntimeError("SmartCaptcha: no token within 60s")`.
    - результат `{"token": <строка>}`; в логах — только длина токена.
    - ДОСЛОВНО и ровно по одному разу в `smartcaptcha.py`: строки-селекторы `'input[name="smart-token"]'`,
@@ -118,9 +124,14 @@
      `getResponse`); iframe сообщает родителю о клике/протяжке через `postMessage`. Сценарии — параметр в URL скрипта
      или в `page_url`. Имена:
      - `test_Y1_checkbox`: клик по `#js-button` → токен в `smart-token` → `solve` (render_mode `widget`, page_url
-       `https://example.com/`) возвращает этот токен; без клика токен не появляется;
+       `https://example.com/`) возвращает этот токен; без клика токен не появляется; поддельный виджет ИГНОРИРУЕТ
+       клики в первые 1,5 с после загрузки (кнопка при этом уже видна) — солвер обязан повторить клик;
+     - `test_Y1b_dead_widget`: виджет игнорирует все клики → `DEADLINE_SECONDS` подменён на 30, кликов ровно
+       `MAX_ACTIONS` (счётчик в поддельном iframe), затем `RuntimeError` с `no token`;
      - `test_Y2_slider`: токен появляется, только если ползунок протянут не меньше чем на 90 % дорожки;
-     - `test_Y3_invisible`: чекбокса нет, токен — только после вызова `execute()`;
+     - `test_Y3_invisible`: чекбокса нет, токен — только после вызова `execute()`; `execute()` вызван один раз и не
+       раньше чем через 3 с после загрузки; отдельный сценарий — checkbox-iframe появляется через 1 с после загрузки:
+       `execute()` не вызывается вовсе, токен — по клику;
      - `test_Y4_text_challenge`: после клика появляется advanced-iframe с `.AdvancedCaptcha_image` → `RuntimeError`,
        в тексте `text challenge`;
      - `test_Y5_silhouette_challenge`: то же с `.AdvancedCaptcha_silhouette` → в тексте `silhouette challenge`;
