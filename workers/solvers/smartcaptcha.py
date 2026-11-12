@@ -161,10 +161,13 @@ class SmartCaptchaSolver(BaseSolver):
         }"""))
 
     async def _challenge_kind(self, page) -> Optional[str]:
-        selector = ADVANCED_FRAME
-        if not await _bounded(page.locator(selector).first.is_visible()):
+        iframe = await _bounded(page.query_selector(ADVANCED_FRAME))
+        if iframe is None:
             return None
-        root = page.frame_locator(selector).first.locator('.AdvancedCaptcha').first
+        frame = await _bounded(iframe.content_frame())
+        if frame is None:
+            return None
+        root = frame.locator('.AdvancedCaptcha').first
         if not await _bounded(root.count()):
             return None
         classes = (await _bounded(root.get_attribute('class')) or '').split()

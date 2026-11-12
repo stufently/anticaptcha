@@ -120,6 +120,10 @@ class _RecordingPage:
         self.roundtrips.append(f'frame_locator:{selector}')
         return _NoElement()
 
+    async def query_selector(self, selector):
+        self.roundtrips.append(f'query_selector:{selector}')
+        return None
+
 
 def test_poll_makes_no_roundtrip_after_deadline(monkeypatch):
     """P03: when the token read itself outlives the deadline, polling stops.
@@ -162,16 +166,9 @@ def test_challenge_kind_waits_for_rendered_body():
     On a real page locator.get_attribute() on a missing element blocks until
     the bound expires, so one unloaded frame eats the whole deadline.
     """
-    class RenderedNothing(_NoElement):
-        async def is_visible(self):
-            return True
-
     class Page:
-        def locator(self, selector):
-            return RenderedNothing()
-
-        def frame_locator(self, selector):
-            return _NoElement()
+        async def query_selector(self, selector):
+            return SimpleNamespace(content_frame=AsyncMock(return_value=_NoElement()))
 
     assert asyncio.run(smartcaptcha.SmartCaptchaSolver()._challenge_kind(Page())) is None
 

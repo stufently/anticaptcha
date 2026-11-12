@@ -492,6 +492,36 @@ def test_failed_refresh_does_not_mark_the_image_processed(fake_yandex, monkeypat
     assert fake_yandex.stats['submits'] == 1
 
 
+def test_challenge_kind_keeps_the_frame_when_it_hides(fake_yandex, monkeypatch):
+    count = Locator.count
+    hidden = []
+
+    def configure(solver):
+        challenge_kind = solver._challenge_kind
+
+        async def run(page):
+            async def hide_after_root_count(locator):
+                result = await count(locator)
+                if (result == 1 and not hidden and await locator.evaluate(
+                        'el => el.classList.contains("AdvancedCaptcha")')):
+                    hidden.append(True)
+                    await page.evaluate('''token => {
+                        document.querySelector('iframe[data-testid="advanced-iframe"]').style.display = 'none';
+                        setTimeout(() => document.querySelector('input[name="smart-token"]').value = token, 200);
+                    }''', TOKEN)
+                return result
+
+            monkeypatch.setattr(Locator, 'count', hide_after_root_count)
+            return await challenge_kind(page)
+
+        monkeypatch.setattr(solver, '_challenge_kind', run)
+
+    classifier = StubClassifier([])
+    assert fake_yandex(classifier, configure=configure, deadline=3) == {'token': TOKEN}
+    assert hidden
+    assert classifier.calls == []
+
+
 def test_round_budget_resets_for_next_solve(fake_yandex):
     solver = smartcaptcha.SmartCaptchaSolver()
     classifier = StubClassifier(['ошибка'] * 3)
