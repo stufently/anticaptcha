@@ -436,6 +436,62 @@ def test_round_budget_survives_playwright_reentry(fake_yandex, monkeypatch):
     assert fake_yandex.stats['submits'] == 3
 
 
+@pytest.mark.parametrize('stage', ['fill', 'typing', 'submit'])
+def test_input_failure_retries_the_unsubmitted_image(fake_yandex, monkeypatch, stage):
+    """The last submitted src must survive an error before the next submit."""
+    method = {'fill': 'fill', 'typing': 'press_sequentially', 'submit': 'click'}[stage]
+    action = getattr(Locator, method)
+    attempts = []
+
+    async def fail_second_input(locator, *args, **kwargs):
+        if stage == 'submit' and await locator.get_attribute('data-testid') != 'submit':
+            return await action(locator, *args, **kwargs)
+        attempts.append(await locator.evaluate(
+            'el => document.querySelector(".AdvancedCaptcha-View img").src'))
+        if len(attempts) == 2:
+            if stage == 'typing':
+                await action(locator, args[0][:2], **kwargs)
+            raise PlaywrightError('one transient input failure')
+        return await action(locator, *args, **kwargs)
+
+    monkeypatch.setattr(Locator, method, fail_second_input)
+    classifier = StubClassifier(['ошибка', 'парус', 'парус'])
+    assert fake_yandex(classifier, deadline=6) == {'token': TOKEN}
+    assert len(attempts) == 3
+    assert attempts[0] != attempts[1]
+    assert attempts[1] == attempts[2]
+    assert len(classifier.calls) == 3
+    assert classifier.calls[0] != classifier.calls[1]
+    # Focusing the field can repaint the screenshot's last row. The src and
+    # image interior identify the unchanged challenge across the retry.
+    for shot in classifier.calls[1:]:
+        with Image.open(io.BytesIO(shot)) as image:
+            assert image.size == (248, 81)
+            assert image.convert('RGB').getpixel((124, 40)) == (90, 70, 140)
+    assert fake_yandex.stats['submits'] == 2
+    assert fake_yandex.stats['refreshes'] == 0
+
+
+def test_failed_refresh_does_not_mark_the_image_processed(fake_yandex, monkeypatch):
+    click = Locator.click
+    failed = []
+
+    async def fail_refresh(locator, **kwargs):
+        if await locator.get_attribute('data-testid') == 'refresh' and not failed:
+            failed.append(True)
+            raise PlaywrightError('one transient refresh failure')
+        return await click(locator, **kwargs)
+
+    monkeypatch.setattr(Locator, 'click', fail_refresh)
+    classifier = StubClassifier([ValueError('vision LLM returned no text'), 'парус'])
+    assert fake_yandex(classifier, deadline=4) == {'token': TOKEN}
+    assert failed
+    assert len(classifier.calls) == 2
+    assert classifier.calls[0] == classifier.calls[1]
+    assert fake_yandex.stats['refreshes'] == 0
+    assert fake_yandex.stats['submits'] == 1
+
+
 def test_round_budget_resets_for_next_solve(fake_yandex):
     solver = smartcaptcha.SmartCaptchaSolver()
     classifier = StubClassifier(['ошибка'] * 3)

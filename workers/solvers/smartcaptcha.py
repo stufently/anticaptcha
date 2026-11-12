@@ -231,8 +231,6 @@ class SmartCaptchaSolver(BaseSolver):
                         break
                 await _bounded(asyncio.sleep(POLL_INTERVAL))
             shot = await _bounded(image.screenshot())
-            previous_src = src
-            state['previous_src'] = src
             state['rounds'] += 1
             try:
                 text = await _bounded(self.vision_classifier.read_text(shot))
@@ -247,6 +245,8 @@ class SmartCaptchaSolver(BaseSolver):
                 refresh = frame.locator('button[data-testid="refresh"]').first
                 if await _bounded(refresh.is_visible()):
                     await _bounded(refresh.click())
+                    previous_src = src
+                    state['previous_src'] = src
                 continue
 
             answer = " ".join(text.lower().split())
@@ -256,6 +256,10 @@ class SmartCaptchaSolver(BaseSolver):
             await _bounded(field.press_sequentially(answer, delay=40))
             before_hint = await hint_state()
             await _bounded(frame.locator('button[data-testid="submit"]').first.click())
+            # Only a dispatched action can cause the widget to replace this
+            # image. An input error must let re-entry retry the same image.
+            previous_src = src
+            state['previous_src'] = src
 
             outcome_deadline = time.monotonic() + OUTCOME_WAIT_SECONDS
             while time.monotonic() < outcome_deadline:
