@@ -182,8 +182,9 @@ def test_Y3_late_checkbox(offline_browser):
     assert len(stats['clicks']) == 1
 
 
-def test_Y4_text_challenge(offline_browser):
-    with pytest.raises(RuntimeError, match='text challenge is not supported yet'):
+def test_Y4_text_challenge(offline_browser, monkeypatch):
+    monkeypatch.setattr(smartcaptcha, 'VisionLLMClassifier', lambda: SimpleNamespace(enabled=False))
+    with pytest.raises(RuntimeError, match='text challenge needs the vision LLM'):
         run_widget(offline_browser, 'text')
 
 

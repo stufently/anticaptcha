@@ -55,6 +55,8 @@ EXCLUDED_TOOLS = [
 # them could otherwise hang the worker forever after `kill()`.
 _REAP_TIMEOUT = 5.0
 
+TEXT_PROMPT = "Transcribe the Russian (Cyrillic) words in the CAPTCHA image exactly, letter by letter, in reading order along the curved baseline. Do not translate, do not autocorrect, keep original case, separate words with single spaces. Put only the transcription into the text field."
+
 
 async def _reap(process) -> None:
     """Kill the qwen CLI with its whole process group, then reap it, bounded."""
@@ -162,6 +164,32 @@ class VisionLLMClassifier:
             # падении/таймауте (иначе /tmp воркера копится чужим контентом).
             image_path.unlink(missing_ok=True)
 
+    async def read_text(self, image_bytes: bytes) -> str:
+        """Transcribe a text challenge without logging the model's answer."""
+        if not self.enabled:
+            raise RuntimeError("Vision LLM is disabled (no API key)")
+        image_path = self.temp_dir / f"captcha_{uuid.uuid4().hex[:8]}.png"
+        schema = {
+            "type": "object",
+            "properties": {"text": {"type": "string", "maxLength": 80}},
+            "required": ["text"],
+        }
+        try:
+            image_path.write_bytes(image_bytes)
+            response = await self._call_qwen_cli(image_path, TEXT_PROMPT, schema=schema)
+            try:
+                result = json.loads(response)
+            except (json.JSONDecodeError, TypeError):
+                raise ValueError("vision LLM returned no text") from None
+            text = result.get("text") if isinstance(result, dict) else None
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError("vision LLM returned no text")
+            text = text.strip()
+            print(f"Vision LLM: read {len(text)} text chars")
+            return text
+        finally:
+            image_path.unlink(missing_ok=True)
+
     def _build_prompt(self, instruction: str, grid_size: str) -> str:
         """Создает prompt для vision model"""
 
@@ -187,7 +215,7 @@ JSON response:"""
 
         return prompt
 
-    async def _call_qwen_cli(self, image_path: Path, prompt: str) -> str:
+    async def _call_qwen_cli(self, image_path: Path, prompt: str, schema=None) -> str:
         """
         Вызывает qw2 CLI для классификации изображения
 
@@ -195,10 +223,11 @@ JSON response:"""
         Картинка уходит в запрос как вложение (@путь + --include-directories),
         инструментов у модели нет: содержимое страницы считается враждебным.
         """
+        custom_schema = schema is not None
         try:
             # Создаем JSON schema для структурированного ответа
             schema_file = self.temp_dir / "schema.json"
-            schema = {
+            schema = schema if custom_schema else {
                 "type": "object",
                 "properties": {
                     "indices": {
@@ -306,7 +335,11 @@ JSON response:"""
                     # Check for structured result
                     if data.get('type') == 'result' and 'structured_result' in data:
                         result = data['structured_result']
-                        print(f"✅ qwen response (structured): {_answer_summary(result)}")
+                        if custom_schema:
+                            text = result.get('text') if isinstance(result, dict) else None
+                            print(f"✅ qwen response (structured): {len(text) if isinstance(text, str) else 0} text chars")
+                        else:
+                            print(f"✅ qwen response (structured): {_answer_summary(result)}")
                         result_found = True
                         return json.dumps(result)
 
@@ -334,6 +367,18 @@ JSON response:"""
 
                 # Method 1: Extract from markdown code block
                 import re
+                if custom_schema:
+                    block = re.search(r'```(?:json)?\s*\n?(.*?)\s*```', text, re.DOTALL)
+                    candidates = [block.group(1), text] if block else [text]
+                    for candidate in candidates:
+                        try:
+                            result = json.loads(candidate)
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(result, dict):
+                            return json.dumps(result)
+                    return "{}"
+
                 markdown_json = re.search(r'```(?:json)?\s*\n?(\[.*?\])\s*\n?```', text, re.DOTALL)
                 if markdown_json:
                     try:
