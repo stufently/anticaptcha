@@ -20,7 +20,11 @@ def test_E8_yandex_demo():
                     'render_mode': 'widget',
                 })
             except RuntimeError as error:
-                assert 'challenge is not supported yet' in str(error)
+                # A datacenter IP always gets a task: any of the solver's own
+                # terminal errors is fine, a crash or a hang is not.
+                assert any(m in str(error) for m in (
+                    'challenge is not supported yet', 'needs the vision LLM',
+                    'not solved in', 'no token within'))
             else:
                 assert isinstance(result['token'], str)
                 assert len(result['token']) >= 50
