@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from PIL import Image
-from playwright.async_api import Error as PlaywrightError, Locator
+from playwright.async_api import ElementHandle, Error as PlaywrightError, Locator
 
 from app.utils.browser import BrowserManager
 from test_m4b_unit import MARKER, PROVIDER, TOKEN, StubClassifier, vision
@@ -369,6 +369,38 @@ def test_hidden_iframe_while_waiting_for_new_image(fake_yandex):
                        deadline=4) == {'token': TOKEN}
     assert fake_yandex.stats['text_returns'][0][0] is None
     assert len(classifier.calls) == 1
+
+
+def test_iframe_hides_between_browser_roundtrips(fake_yandex, monkeypatch):
+    hidden = []
+
+    def configure(solver):
+        solve_text = solver._solve_text
+
+        async def run(page):
+            def intercept(check):
+                async def is_visible(node, **kwargs):
+                    visible = await check(node, **kwargs)
+                    if (visible and not hidden and
+                            await page.evaluate('window.widgetStats.submits === 1') and
+                            await node.evaluate('el => el.tagName') == 'IFRAME'):
+                        hidden.append(True)
+                        await page.evaluate('''token => {
+                            document.querySelector('iframe[data-testid="advanced-iframe"]').style.display = 'none';
+                            setTimeout(() => document.querySelector('input[name="smart-token"]').value = token, 200);
+                        }''', TOKEN)
+                    return visible
+                return is_visible
+
+            for cls in (Locator, ElementHandle):
+                monkeypatch.setattr(cls, 'is_visible', intercept(cls.is_visible))
+            return await solve_text(page)
+
+        monkeypatch.setattr(solver, '_solve_text', run)
+
+    assert fake_yandex(StubClassifier(['парус']), mode='silent', deadline=4,
+                       configure=configure) == {'token': TOKEN}
+    assert hidden
 
 
 def test_round_budget_survives_playwright_reentry(fake_yandex, monkeypatch):

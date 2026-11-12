@@ -185,8 +185,14 @@ class SmartCaptchaSolver(BaseSolver):
         if not self.vision_classifier.enabled:
             raise RuntimeError("SmartCaptcha: text challenge needs the vision LLM")
 
-        iframe = page.locator(ADVANCED_FRAME).first
-        frame = page.frame_locator(ADVANCED_FRAME).first
+        # Bind to the selected element. Re-resolving a :visible frame locator
+        # after it hides can otherwise stall until the whole poll deadline.
+        iframe = await _bounded(page.query_selector(ADVANCED_FRAME))
+        if iframe is None:
+            return None
+        frame = await _bounded(iframe.content_frame())
+        if frame is None:
+            return None
         image = frame.locator('.AdvancedCaptcha-View img').first
         hint = frame.locator('.Textinput-Hint').first
         # The poll owns this budget, so a renderer error cannot reset it on
