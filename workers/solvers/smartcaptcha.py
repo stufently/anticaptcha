@@ -134,7 +134,9 @@ class SmartCaptchaSolver(BaseSolver):
             await _within_action(page.mouse.down(), deadline)
             await _within_action(page.mouse.move(track['x'] + track['width'] - 1, y, steps=15), deadline)
         finally:
-            await _within_action(page.mouse.up(), deadline)
+            # Release even when the gesture budget is spent: a button left down
+            # would turn every later click on the page into a drag.
+            await _bounded(page.mouse.up())
 
     async def _read_token(self, page) -> Optional[str]:
         return await _bounded(page.evaluate("""() => {
