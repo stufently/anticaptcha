@@ -28,6 +28,11 @@ async def _bounded(operation):
     return await asyncio.wait_for(operation, max(0.5, remaining))
 
 
+async def _within_action(operation, deadline):
+    """All parts of one gesture share a short absolute deadline, with no floor."""
+    return await asyncio.wait_for(operation, max(0, deadline - time.monotonic()))
+
+
 class SmartCaptchaSolver(BaseSolver):
     async def setup(self):
         pass
@@ -89,30 +94,25 @@ class SmartCaptchaSolver(BaseSolver):
                         continue
                     frame = page.frame_locator(CHECKBOX_FRAME).first
                     thumb = frame.locator('.SliderCaptcha [data-testid="thumb"]').first
-                    if await _bounded(thumb.is_visible()):
-                        await _bounded(thumb.scroll_into_view_if_needed())
-                        start = await _bounded(thumb.bounding_box())
-                        track = await _bounded(frame.locator('.SliderCaptcha').first.bounding_box())
-                        if start and track:
-                            x, y = start['x'] + start['width'] / 2, start['y'] + start['height'] / 2
-                            await _bounded(page.mouse.move(x, y))
-                            actions += 1
-                            try:
-                                await _bounded(page.mouse.down())
-                                try:
-                                    await _bounded(page.mouse.move(track['x'] + track['width'] - 1, y, steps=15))
-                                finally:
-                                    await _bounded(page.mouse.up())
-                            finally:
-                                next_action_at = time.monotonic() + ACTION_WAIT_SECONDS
-                    else:
-                        button = frame.locator('#js-button').first
-                        if await _bounded(button.is_visible()):
-                            actions += 1
-                            try:
-                                await _bounded(button.click())
-                            finally:
-                                next_action_at = time.monotonic() + ACTION_WAIT_SECONDS
+                    slider = await _bounded(thumb.is_visible())
+                    button = frame.locator('#js-button').first
+                    if slider or await _bounded(button.is_visible()):
+                        actions += 1
+                        action_deadline = min(deadline, time.monotonic() + ACTION_WAIT_SECONDS)
+                        try:
+                            if slider:
+                                await self._drag_slider(page, thumb, frame, action_deadline)
+                            else:
+                                await _within_action(button.click(), action_deadline)
+                        except (asyncio.TimeoutError, PlaywrightError):
+                            pass
+                        finally:
+                            next_action_at = time.monotonic() + ACTION_WAIT_SECONDS
+                        # Even a stalled action may have issued a token. Read it
+                        # before checking the poll deadline or attempting anything else.
+                        token = await self._read_token(page)
+                        if token:
+                            return token
                 except (asyncio.TimeoutError, PlaywrightError):
                     # A loading/replaced frame can race a lookup; a stalled
                     # renderer consumes the remaining deadline and ends here.
@@ -120,7 +120,21 @@ class SmartCaptchaSolver(BaseSolver):
                 await asyncio.sleep(min(POLL_INTERVAL, max(0, deadline - time.monotonic())))
         finally:
             _deadline.reset(marker)
-        raise RuntimeError('SmartCaptcha: no token within 60s')
+        raise RuntimeError(f'SmartCaptcha: no token within {DEADLINE_SECONDS}s')
+
+    async def _drag_slider(self, page, thumb, frame, deadline):
+        await _within_action(thumb.scroll_into_view_if_needed(), deadline)
+        start = await _within_action(thumb.bounding_box(), deadline)
+        track = await _within_action(frame.locator('.SliderCaptcha').first.bounding_box(), deadline)
+        if not start or not track:
+            return
+        x, y = start['x'] + start['width'] / 2, start['y'] + start['height'] / 2
+        await _within_action(page.mouse.move(x, y), deadline)
+        try:
+            await _within_action(page.mouse.down(), deadline)
+            await _within_action(page.mouse.move(track['x'] + track['width'] - 1, y, steps=15), deadline)
+        finally:
+            await _within_action(page.mouse.up(), deadline)
 
     async def _read_token(self, page) -> Optional[str]:
         return await _bounded(page.evaluate("""() => {

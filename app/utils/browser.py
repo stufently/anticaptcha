@@ -20,6 +20,7 @@ class BrowserManager:
         self._browser: Optional[Browser] = None
         self._context: Optional[BrowserContext] = None
         self._proxy_contexts = {}
+        self._context_cleanup = set()
         self._stealth = Stealth(navigator_platform_override="Linux x86_64", webgl_vendor_override="Google Inc. (Intel)", webgl_renderer_override="ANGLE (Intel, Mesa Intel(R) UHD Graphics 620 (KBL GT2), OpenGL 4.6)") if HAS_STEALTH else None
         self._lock = asyncio.Lock()
 
@@ -119,7 +120,16 @@ class BrowserManager:
         """
         browser = await self.get_browser()
         if proxy is not None:
-            context = await browser.new_context(proxy=proxy)
+            creation = asyncio.create_task(browser.new_context(proxy=proxy))
+            try:
+                context = await asyncio.shield(creation)
+            except asyncio.CancelledError:
+                # Chromium may already be creating the context. Keep the request
+                # alive and dispose of its result without delaying cancellation.
+                cleanup = asyncio.create_task(self._close_when_created(creation))
+                self._context_cleanup.add(cleanup)
+                cleanup.add_done_callback(self._context_cleanup.discard)
+                raise
             try:
                 page = await context.new_page()
             except (Exception, asyncio.CancelledError):
@@ -137,6 +147,15 @@ class BrowserManager:
             raise
         
         return page
+
+    async def _close_when_created(self, creation):
+        """Own and close a context whose caller was cancelled before receiving it."""
+        try:
+            context = await creation
+            await context.close()
+        except Exception as exc:
+            # Do not print proxy options or provider error text containing them.
+            print(f'Proxy context cleanup ended: {type(exc).__name__}', flush=True)
 
     async def close_page(self, page):
         """Close the page and only the explicit proxy context we own for it."""
@@ -157,6 +176,8 @@ class BrowserManager:
             await self._browser.close()
             self._browser = None
         self._proxy_contexts.clear()
+        if self._context_cleanup:
+            await asyncio.gather(*tuple(self._context_cleanup))
         
         if self._playwright:
             await self._playwright.stop()
