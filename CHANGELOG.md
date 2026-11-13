@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-11-13
+
+CLI удаления пользователя и отзыва ключей (`list-keys`, `revoke-key`,
+`delete-user --yes`); id пользователей и ключей больше не переиспользуются.
+
 ### Added — 2026-11-13
 - CLI: `list-keys <username>` (id, active/revoked, дата; сами ключи и хэши не
   печатаются), `revoke-key --id N | --user <username>` (деактивация, строки и
