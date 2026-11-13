@@ -10,6 +10,10 @@ import hashlib
 class User(Base):
     """User model"""
     __tablename__ = "users"
+    # Ids are never handed out twice: `app.cli delete-user` deletes rows, and a
+    # reused id would give a stale reference (request, revoke) the next owner's
+    # row. database.init_db migrates existing tables.
+    __table_args__ = {"sqlite_autoincrement": True}
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, nullable=False)
@@ -29,6 +33,7 @@ class User(Base):
 class APIKey(Base):
     """API Key for authentication"""
     __tablename__ = "api_keys"
+    __table_args__ = {"sqlite_autoincrement": True}  # see User
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)

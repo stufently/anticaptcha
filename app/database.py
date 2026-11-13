@@ -83,6 +83,7 @@ def _init_db_once():
     with engine.connect() as conn:
         conn.exec_driver_sql("BEGIN IMMEDIATE")
         Base.metadata.create_all(bind=conn)
+        _migrate_users_and_keys_autoincrement(conn)
         _migrate_tasks_autoincrement(conn)
         conn.commit()
 
@@ -104,7 +105,27 @@ def _migrate_tasks_autoincrement(conn) -> bool:
     """
     from app.models.task import Task  # models import Base from this module
 
-    table = Task.__table__
+    return _migrate_autoincrement(conn, Task.__table__)
+
+
+def _migrate_users_and_keys_autoincrement(conn) -> bool:
+    """Same rebuild for `users` and `api_keys` (1.3.1).
+
+    `app.cli delete-user` physically deletes a user and its keys. Without
+    AUTOINCREMENT the next user/key would get the freed id back, and anything
+    still holding the old id - a request authenticated just before the delete,
+    a stale `revoke-key --id` - would act on the new owner's row. Returns True
+    when at least one table was rebuilt.
+    """
+    from app.models.api_key import APIKey, User
+
+    rebuilt_users = _migrate_autoincrement(conn, User.__table__)
+    rebuilt_keys = _migrate_autoincrement(conn, APIKey.__table__)
+    return rebuilt_users or rebuilt_keys
+
+
+def _migrate_autoincrement(conn, table) -> bool:
+    """Rebuild one table with AUTOINCREMENT (see _migrate_tasks_autoincrement)."""
     ddl = conn.exec_driver_sql(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
         (table.name,),
@@ -113,7 +134,14 @@ def _migrate_tasks_autoincrement(conn) -> bool:
         return False
 
     old = f"{table.name}_pre_autoincrement"
-    conn.exec_driver_sql(f'ALTER TABLE "{table.name}" RENAME TO "{old}"')
+    # Since SQLite 3.26 a RENAME also rewrites REFERENCES in OTHER tables:
+    # renaming api_keys would point tasks.api_key_id at the temporary table,
+    # which is dropped below. The legacy mode renames this table only.
+    conn.exec_driver_sql("PRAGMA legacy_alter_table=ON")
+    try:
+        conn.exec_driver_sql(f'ALTER TABLE "{table.name}" RENAME TO "{old}"')
+    finally:
+        conn.exec_driver_sql("PRAGMA legacy_alter_table=OFF")
     # The rename moved the indexes onto the temporary table but kept their
     # names, and the new table brings the very same ones (ix_tasks_id): they
     # have to go first or CREATE TABLE fails on a duplicate index name.
@@ -127,7 +155,12 @@ def _migrate_tasks_autoincrement(conn) -> bool:
     for (name,) in stale:
         conn.exec_driver_sql(f'DROP INDEX "{name}"')
     table.create(conn)
-    columns = ", ".join(f'"{column.name}"' for column in table.columns)
+    # Copy the columns both versions have: an old users table may predate
+    # password_salt/is_admin (see README), the new columns then take NULL.
+    existing = {row[1] for row in conn.exec_driver_sql(f'PRAGMA table_info("{old}")')}
+    columns = ", ".join(
+        f'"{column.name}"' for column in table.columns if column.name in existing
+    )
     conn.exec_driver_sql(
         f'INSERT INTO "{table.name}" ({columns}) SELECT {columns} FROM "{old}"'
     )

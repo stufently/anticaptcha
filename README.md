@@ -69,6 +69,28 @@ docker exec -it anticaptcha-api python -m app.cli create-user admin password123 
 docker exec -it anticaptcha-api python -m app.cli create-key admin
 ```
 
+### Отзыв ключей и удаление пользователя (CLI)
+
+Сами ключи в базе не хранятся (только SHA-256), поэтому CLI их никогда не печатает:
+ключ адресуется по `id` из `list-keys`.
+
+```bash
+# Ключи пользователя: id, active/revoked, дата создания
+docker exec -it anticaptcha-api python -m app.cli list-keys alice
+
+# Отозвать один ключ или все ключи пользователя (строки и история задач остаются)
+docker exec -it anticaptcha-api python -m app.cli revoke-key --id 7
+docker exec -it anticaptcha-api python -m app.cli revoke-key --user alice
+
+# Удалить пользователя вместе со всеми его ключами и их задачами.
+# Без --yes команда отказывается (rc=1). Если у пользователя есть задачи
+# pending/processing — тоже отказ: сначала revoke-key --user, дождаться задач, повторить.
+docker exec -it anticaptcha-api python -m app.cli delete-user alice --yes
+```
+
+Ошибки (нет пользователя/ключа, нет `--yes`) печатаются в stderr с кодом возврата 1.
+Id удалённых пользователей и ключей повторно не выдаются (AUTOINCREMENT).
+
 ### Миграция базы данных
 
 Если у вас уже есть база данных со старой схемой (без полей `password_salt` и `is_admin`), необходимо:

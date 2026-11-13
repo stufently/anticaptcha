@@ -59,15 +59,34 @@ def create_task(
     """Create a new CAPTCHA solving task"""
     api_key, current_user = auth_data
 
+    # Take the write lock BEFORE counting: a check-then-insert without it lets
+    # concurrent creates all read the old count and all insert (measured: five
+    # rows for a limit of one). BEGIN IMMEDIATE on this session's connection
+    # keeps the count and the insert in one transaction; the SELECTs that
+    # validated the API key do not start a transaction of their own in
+    # pysqlite, so this does not fail with "transaction within a transaction".
+    db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+
+    # The key was validated before the lock: `app.cli delete-user` or
+    # `revoke-key` may have committed in between, and an insert now would leave
+    # a task pointing at a deleted key (foreign_keys is off in SQLite). Check it
+    # again under the lock, by hash too: a deleted key's id can be reused.
+    still_valid = db.execute(
+        select(APIKey.id)
+        .join(User, User.id == APIKey.user_id)
+        .where(
+            APIKey.id == api_key.id,
+            APIKey.key_hash == api_key.key_hash,
+            APIKey.is_active == True,  # noqa: E712
+            User.is_active == True,  # noqa: E712
+        )
+    ).first()
+    if still_valid is None:
+        db.rollback()
+        raise HTTPException(status_code=401, detail="Invalid or inactive API key")
+
     limit = settings.max_active_tasks_per_key
     if limit > 0:
-        # Take the write lock BEFORE counting: a check-then-insert without it lets
-        # concurrent creates all read the old count and all insert (measured: five
-        # rows for a limit of one). BEGIN IMMEDIATE on this session's connection
-        # keeps the count and the insert in one transaction; the SELECTs that
-        # validated the API key do not start a transaction of their own in
-        # pysqlite, so this does not fail with "transaction within a transaction".
-        db.connection().exec_driver_sql("BEGIN IMMEDIATE")
         active = db.execute(
             select(func.count())
             .select_from(Task)
@@ -106,9 +125,13 @@ def get_task(
 ):
     """Get task result by ID (only tasks created with the caller's API key)"""
     api_key, _ = auth_data
-    task = db.query(Task).filter(
+    # Matching the key hash in the same statement: api_keys has no AUTOINCREMENT,
+    # so after `delete-user` a new key can get the deleted key's id, and a
+    # request authenticated just before the delete must not read its tasks.
+    task = db.query(Task).join(APIKey, APIKey.id == Task.api_key_id).filter(
         Task.id == task_id,
-        Task.api_key_id == api_key.id
+        Task.api_key_id == api_key.id,
+        APIKey.key_hash == api_key.key_hash,
     ).first()
     
     if not task:

@@ -101,16 +101,33 @@ def create_user(
 def create_api_key(
     user_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    authorization: Optional[str] = Header(None),
 ):
     """Generate a new API key for user (requires auth, admin can create for any user)"""
     # Only admin can create keys for other users
     if current_user.id != user_id and not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Can only create API keys for yourself")
     
+    # Look the user up under the write lock and insert in the same transaction:
+    # `app.cli delete-user` may commit between authentication and the insert,
+    # and a key row left behind for a deleted user id would be inherited by the
+    # next user that gets this id (users has no AUTOINCREMENT).
+    db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+    # The caller's own credentials too: `revoke-key --user` committed between
+    # authentication and the lock must not let this request mint a fresh key.
+    try:
+        caller = get_current_user(authorization, db)
+    except HTTPException:
+        db.rollback()
+        raise
+    if caller.id != current_user.id or (caller.id != user_id and not caller.is_admin):
+        db.rollback()
+        raise HTTPException(status_code=401, detail="Invalid API key or admin token")
     user = db.query(User).filter(User.id == user_id).first()
 
     if not user:
+        db.rollback()
         raise HTTPException(status_code=404, detail="User not found")
 
     # Generate key
