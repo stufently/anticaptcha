@@ -19,6 +19,7 @@ from workers.solvers.hcaptcha import HcaptchaSolver
 from workers.solvers.image_text import ImageTextSolver
 from workers.solvers.turnstile import TurnstileSolver
 from workers.solvers.smartcaptcha import SmartCaptchaSolver
+from workers.solvers.slider import SliderCaptchaSolver
 
 
 # Solver registry
@@ -29,6 +30,7 @@ SOLVERS = {
     "image_text": ImageTextSolver,
     "turnstile": TurnstileSolver,
     "yandex_smartcaptcha": SmartCaptchaSolver,
+    "slider": SliderCaptchaSolver,
 }
 
 

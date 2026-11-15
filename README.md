@@ -166,6 +166,7 @@ curl -X POST http://localhost:8000/api/v1/task \
 | `recaptcha_v3` | reCAPTCHA v3 (invisible) | возвращает токен; score назначает Google, гарантий по нему нет |
 | `recaptcha_v2` | reCAPTCHA v2 (плитки) | чекбокс работает (проверено тестовым ключом Google); картиночный челлендж решается **только с включённым vision LLM**, а на реальных сайтах с датацентрового IP успех не гарантирован |
 | `yandex_smartcaptcha` | Yandex SmartCaptcha | чекбокс, слайдер и невидимый режим возвращают токен; текстовое задание решается через vision LLM (нужен ключ; до 3 раундов на задачу, дедлайн опроса 75 с), точность зависит от сложности ключа SmartCaptcha; с датацентрового IP Яндекс не принимает даже верные ответы — нужен резидентный `proxy`; силуэты не решаются |
+| `slider` | Slider CAPTCHA | универсальный солвер для слайдер CAPTCHA (AliExpress, Alibaba и др.); имитирует человеческое движение с кривой, ускорением и джиттером; до 3 попыток на задачу |
 
 Поля `input_data` для браузерных типов:
 
@@ -176,6 +177,14 @@ curl -X POST http://localhost:8000/api/v1/task \
 | `render_mode` | нет | `page` (по умолчанию, если поля нет или оно `null`) или `widget` — см. ниже |
 | `action` | нет | только для `recaptcha_v3`, по умолчанию `submit` |
 | `proxy` | нет | для `yandex_smartcaptcha`: `scheme://[user:pass@]host:port`; `http`, `https` или `socks5` (SOCKS5 только без логина); `null` — без прокси |
+
+Для `slider` поле `input_data` может содержать:
+
+| Поле | Обязательно | Описание |
+|---|---|---|
+| `page_url` | да | страница со слайдер CAPTCHA |
+| `handle_selector` | нет | CSS-селектор ручки слайдера (по умолчанию: `#nc_1_n1z`, `.nc_iconfont.btn_slide`, `[role="slider"]`, `.slider-handle`) |
+| `track_selector` | нет | CSS-селектор трека слайдера (по умолчанию: `#nc_1__scale_text`, `.nc_scale`, `.slider-track`, `.slider-rail`) |
 
 Прокси должен иметь публичный хост и порт 1–65535. Для авторизации нужны и логин,
 и пароль; спецсимволы кодируются как в URL (`p%40ss` → `p@ss`). Проверяются все

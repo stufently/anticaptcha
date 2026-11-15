@@ -17,7 +17,7 @@ class Task(Base):
     api_key_id = Column(Integer, ForeignKey("api_keys.id"), nullable=False)
     
     # Task details
-    type = Column(String(50), nullable=False)  # recaptcha_v2, recaptcha_v3, hcaptcha, image_text, turnstile
+    type = Column(String(50), nullable=False)  # recaptcha_v2, recaptcha_v3, hcaptcha, image_text, turnstile, yandex_smartcaptcha, slider
     status = Column(String(20), default="pending")  # pending, processing, solved, failed
     
     # Input/Output
