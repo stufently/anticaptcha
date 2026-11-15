@@ -13,6 +13,7 @@ class TaskType(str, Enum):
     IMAGE_TEXT = "image_text"
     TURNSTILE = "turnstile"
     YANDEX_SMARTCAPTCHA = "yandex_smartcaptcha"
+    SLIDER = "slider"
 
 
 class TaskStatus(str, Enum):
