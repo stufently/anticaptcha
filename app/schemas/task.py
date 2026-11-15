@@ -22,6 +22,13 @@ class TaskType(str, Enum):
     TENCENT = "tencent"
     VK_CAPTCHA = "vk_captcha"
     VK_CHALLENGE = "vk_challenge"
+    LEMIN = "lemin"
+    CAPY_PUZZLE = "capy_puzzle"
+    DATADOME = "datadome"
+    MT_CAPTCHA = "mtcaptcha"
+    AUDIO_CAPTCHA = "audio_captcha"
+    MATH_CAPTCHA = "math_captcha"
+    LOGIC_CAPTCHA = "logic_captcha"
 
 
 class TaskStatus(str, Enum):

@@ -28,6 +28,13 @@ from workers.solvers.simple_captcha import SimpleCaptchaSolver
 from workers.solvers.tencent import TencentCaptchaSolver
 from workers.solvers.vk import VKCaptchaSolver
 from workers.solvers.vk_challenge import VKChallengeSolver
+from workers.solvers.lemin import LeminSolver
+from workers.solvers.capy import CapyPuzzleSolver
+from workers.solvers.datadome import DataDomeSolver
+from workers.solvers.mtcaptcha import MTCaptchaSolver
+from workers.solvers.audio_captcha import AudioCaptchaSolver
+from workers.solvers.math_captcha import MathCaptchaSolver
+from workers.solvers.logic_captcha import LogicCaptchaSolver
 
 
 # Solver registry
@@ -47,6 +54,13 @@ SOLVERS = {
     "tencent": TencentCaptchaSolver,
     "vk_captcha": VKCaptchaSolver,
     "vk_challenge": VKChallengeSolver,
+    "lemin": LeminSolver,
+    "capy_puzzle": CapyPuzzleSolver,
+    "datadome": DataDomeSolver,
+    "mtcaptcha": MTCaptchaSolver,
+    "audio_captcha": AudioCaptchaSolver,
+    "math_captcha": MathCaptchaSolver,
+    "logic_captcha": LogicCaptchaSolver,
 }
 
 

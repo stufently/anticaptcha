@@ -175,6 +175,13 @@ curl -X POST http://localhost:8000/api/v1/task \
 | `tencent` | Tencent CAPTCHA | солвер для Tencent CAPTCHA |
 | `vk_captcha` | VK CAPTCHA | солвер для VK CAPTCHA (текст, изображения) |
 | `vk_challenge` | VK Challenge | солвер для VK Challenge (поведенческая проверка) |
+| `lemin` | Lemin CAPTCHA | солвер для Lemin CAPTCHA (слайдер + клик) |
+| `capy_puzzle` | Capy Puzzle | солвер для Capy Puzzle (пазлы) |
+| `datadome` | DataDome CAPTCHA | солвер для DataDome (поведенческая защита) |
+| `mtcaptcha` | MTCaptcha | солвер для MTCaptcha (чекбокс + изображения) |
+| `audio_captcha` | Audio CAPTCHA | солвер для аудио CAPTCHA (распознавание речи) |
+| `math_captcha` | Math CAPTCHA | солвер для математических CAPTCHA |
+| `logic_captcha` | Logic CAPTCHA | солвер для логических CAPTCHA (паттерны, последовательности) |
 
 Поля `input_data` для браузерных типов:
 
