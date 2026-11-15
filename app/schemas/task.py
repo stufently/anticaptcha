@@ -29,6 +29,12 @@ class TaskType(str, Enum):
     AUDIO_CAPTCHA = "audio_captcha"
     MATH_CAPTCHA = "math_captcha"
     LOGIC_CAPTCHA = "logic_captcha"
+    BINANCE = "binance"
+    TEMU = "temu"
+    ALTCHA = "altcha"
+    PROSOPO = "prosopo"
+    CYBERSIARA = "cybersiara"
+    CUSTOM_ENTERPRISE = "custom_enterprise"
 
 
 class TaskStatus(str, Enum):

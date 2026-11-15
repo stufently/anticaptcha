@@ -182,6 +182,12 @@ curl -X POST http://localhost:8000/api/v1/task \
 | `audio_captcha` | Audio CAPTCHA | солвер для аудио CAPTCHA (распознавание речи) |
 | `math_captcha` | Math CAPTCHA | солвер для математических CAPTCHA |
 | `logic_captcha` | Logic CAPTCHA | солвер для логических CAPTCHA (паттерны, последовательности) |
+| `binance` | Binance CAPTCHA | солвер для Binance CAPTCHA (криптобиржи) |
+| `temu` | Temu CAPTCHA | солвер для Temu CAPTCHA (marketplace) |
+| `altcha` | Altcha CAPTCHA | солвер для Altcha (privacy-focused, proof-of-work) |
+| `prosopo` | Prosopo CAPTCHA | солвер для Prosopo (децентрализованная) |
+| `cybersiara` | CyberSiARA CAPTCHA | солвер для CyberSiARA (advanced anti-bot) |
+| `custom_enterprise` | Custom Enterprise | настраиваемый солвер для кастомных решений |
 
 Поля `input_data` для браузерных типов:
 

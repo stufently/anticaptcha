@@ -35,6 +35,12 @@ from workers.solvers.mtcaptcha import MTCaptchaSolver
 from workers.solvers.audio_captcha import AudioCaptchaSolver
 from workers.solvers.math_captcha import MathCaptchaSolver
 from workers.solvers.logic_captcha import LogicCaptchaSolver
+from workers.solvers.binance import BinanceCaptchaSolver
+from workers.solvers.temu import TemuCaptchaSolver
+from workers.solvers.altcha import AltchaSolver
+from workers.solvers.prosopo import ProsopoSolver
+from workers.solvers.cybersiara import CyberSiaraSolver
+from workers.solvers.custom_enterprise import CustomEnterpriseSolver
 
 
 # Solver registry
@@ -61,6 +67,12 @@ SOLVERS = {
     "audio_captcha": AudioCaptchaSolver,
     "math_captcha": MathCaptchaSolver,
     "logic_captcha": LogicCaptchaSolver,
+    "binance": BinanceCaptchaSolver,
+    "temu": TemuCaptchaSolver,
+    "altcha": AltchaSolver,
+    "prosopo": ProsopoSolver,
+    "cybersiara": CyberSiaraSolver,
+    "custom_enterprise": CustomEnterpriseSolver,
 }
 
 
