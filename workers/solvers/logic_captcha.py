@@ -66,7 +66,7 @@ class LogicCaptchaSolver(BaseSolver):
                                     box['y'] + box['height'] / 2
                                 )
                                 await asyncio.sleep(1)
-                    except:
+                    except Exception:
                         pass
                 
                 elif 'sequence' in instruction.lower() or 'next' in instruction.lower():
@@ -86,7 +86,7 @@ class LogicCaptchaSolver(BaseSolver):
                                     box['y'] + box['height'] / 2
                                 )
                                 await asyncio.sleep(1)
-                    except:
+                    except Exception:
                         pass
                 
                 else:

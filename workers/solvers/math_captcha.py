@@ -54,7 +54,7 @@ class MathCaptchaSolver(BaseSolver):
                     
                     try:
                         answer = int(result.strip())
-                    except:
+                    except Exception:
                         return {'success': False, 'error': 'Could not solve math problem'}
                 
                 # Enter answer
