@@ -72,9 +72,7 @@ class TestSliderCaptchaSolver:
         # Mock _drag_slider to succeed
         solver._drag_slider = AsyncMock()
         
-        # Mock install_widget_page
-        with patch('workers.solvers.slider.install_widget_page', new_callable=AsyncMock):
-            result = await solver.solve({'page_url': 'https://example.com'})
+        result = await solver.solve({'page_url': 'https://example.com'})
         
         assert result['success'] is True
         assert 'error' not in result
@@ -88,9 +86,7 @@ class TestSliderCaptchaSolver:
         # Mock _drag_slider to succeed but slider remains
         solver._drag_slider = AsyncMock()
         
-        # Mock install_widget_page
-        with patch('workers.solvers.slider.install_widget_page', new_callable=AsyncMock):
-            result = await solver.solve({'page_url': 'https://example.com'})
+        result = await solver.solve({'page_url': 'https://example.com'})
         
         assert result['success'] is False
         assert 'error' in result
@@ -177,12 +173,11 @@ class TestSliderCaptchaSolver:
         solver.detect = AsyncMock(return_value=False)
         solver._drag_slider = AsyncMock()
         
-        with patch('workers.solvers.slider.install_widget_page', new_callable=AsyncMock):
-            result = await solver.solve({
-                'page_url': 'https://example.com',
-                'handle_selector': '#custom-handle',
-                'track_selector': '#custom-track'
-            })
+        result = await solver.solve({
+            'page_url': 'https://example.com',
+            'handle_selector': '#custom-handle',
+            'track_selector': '#custom-track'
+        })
         
         assert result['success'] is True
         # Verify _drag_slider was called with custom selectors

@@ -5,7 +5,6 @@ from typing import Optional, List, Dict, Any
 from playwright.async_api import Page, Locator
 
 from .base import BaseSolver
-from .widget_page import install_widget_page
 from app.utils.browser import browser_manager
 
 
@@ -65,9 +64,6 @@ class SliderCaptchaSolver(BaseSolver):
             # Navigate to page
             await page.goto(page_url, wait_until='domcontentloaded')
             await page.wait_for_timeout(1000)
-            
-            # Install widget page interception if needed
-            await install_widget_page(page, 'slider', page_url)
             
             for attempt in range(3):
                 try:
