@@ -20,6 +20,14 @@ from workers.solvers.image_text import ImageTextSolver
 from workers.solvers.turnstile import TurnstileSolver
 from workers.solvers.smartcaptcha import SmartCaptchaSolver
 from workers.solvers.slider import SliderCaptchaSolver
+from workers.solvers.amazon import AmazonWAFSolver
+from workers.solvers.cloudflare import CloudflareTurnstileSolver
+from workers.solvers.funcaptcha import FunCaptchaSolver
+from workers.solvers.geetest import GeeTestSolver
+from workers.solvers.simple_captcha import SimpleCaptchaSolver
+from workers.solvers.tencent import TencentCaptchaSolver
+from workers.solvers.vk import VKCaptchaSolver
+from workers.solvers.vk_challenge import VKChallengeSolver
 
 
 # Solver registry
@@ -31,6 +39,14 @@ SOLVERS = {
     "turnstile": TurnstileSolver,
     "yandex_smartcaptcha": SmartCaptchaSolver,
     "slider": SliderCaptchaSolver,
+    "amazon_waf": AmazonWAFSolver,
+    "cloudflare": CloudflareTurnstileSolver,
+    "funcaptcha": FunCaptchaSolver,
+    "geetest": GeeTestSolver,
+    "simple_captcha": SimpleCaptchaSolver,
+    "tencent": TencentCaptchaSolver,
+    "vk_captcha": VKCaptchaSolver,
+    "vk_challenge": VKChallengeSolver,
 }
 
 

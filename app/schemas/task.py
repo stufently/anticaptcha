@@ -14,6 +14,14 @@ class TaskType(str, Enum):
     TURNSTILE = "turnstile"
     YANDEX_SMARTCAPTCHA = "yandex_smartcaptcha"
     SLIDER = "slider"
+    AMAZON_WAF = "amazon_waf"
+    CLOUDFLARE = "cloudflare"
+    FUNCAPTCHA = "funcaptcha"
+    GEETEST = "geetest"
+    SIMPLE_CAPTCHA = "simple_captcha"
+    TENCENT = "tencent"
+    VK_CAPTCHA = "vk_captcha"
+    VK_CHALLENGE = "vk_challenge"
 
 
 class TaskStatus(str, Enum):
