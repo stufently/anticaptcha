@@ -1,4 +1,5 @@
 """Slider CAPTCHA solver with human-like drag movement."""
+import asyncio
 import math
 import random
 from typing import Optional, List, Dict, Any
@@ -6,6 +7,9 @@ from playwright.async_api import Page, Locator
 
 from .base import BaseSolver
 from app.utils.browser import browser_manager
+from workers.solvers.url_guard import validate_page_url
+
+GOTO_TIMEOUT_MS = 30000
 
 
 class SliderCaptchaSolver(BaseSolver):
@@ -36,50 +40,43 @@ class SliderCaptchaSolver(BaseSolver):
         Args:
             input_data: {
                 "page_url": "https://example.com",
-                "handle_selector": "#custom-handle",  # optional
-                "track_selector": "#custom-track"      # optional
+                "handle_selector": "#custom-handle",  # optional, str or list of str
+                "track_selector": "#custom-track"      # optional, str or list of str
             }
         
         Returns:
-            dict with 'success' (bool) and optional 'error' (str)
+            {"success": True}; any failure raises, so the task ends as failed
         """
         page_url = input_data.get('page_url')
         if not page_url:
-            return {'success': False, 'error': 'page_url is required'}
+            raise ValueError('page_url is required')
         
         # Allow custom selectors from input_data
-        handle_selectors = input_data.get('handle_selector', self.SLIDER_HANDLES)
-        track_selectors = input_data.get('track_selector', self.SLIDER_TRACKS)
+        handle_selectors = _selectors(input_data.get('handle_selector'), self.SLIDER_HANDLES, 'handle_selector')
+        track_selectors = _selectors(input_data.get('track_selector'), self.SLIDER_TRACKS, 'track_selector')
         
-        # Convert single selector to list
-        if isinstance(handle_selectors, str):
-            handle_selectors = [handle_selectors]
-        if isinstance(track_selectors, str):
-            track_selectors = [track_selectors]
+        # SSRF guard before the browser is touched (shared by all URL solvers)
+        page_url = await asyncio.to_thread(validate_page_url, page_url)
         
-        # Create browser context
         page = await browser_manager.new_page()
         
         try:
-            # Navigate to page
-            await page.goto(page_url, wait_until='domcontentloaded')
+            await page.goto(page_url, timeout=GOTO_TIMEOUT_MS, wait_until='domcontentloaded')
             await page.wait_for_timeout(1000)
             
             for attempt in range(3):
                 try:
                     await self._drag_slider(page, handle_selectors, track_selectors)
-                    # Wait for verification
-                    await page.wait_for_timeout(1500)
                     
                     # Check if slider is still present
                     if not await self.detect(page):
                         return {'success': True}
                 except Exception as e:
                     if attempt == 2:  # Last attempt
-                        return {'success': False, 'error': f'Slider solve failed: {str(e)}'}
+                        raise RuntimeError(f'Slider solve failed: {e}') from e
                     await page.wait_for_timeout(500)
             
-            return {'success': False, 'error': 'Slider still present after 3 attempts'}
+            raise RuntimeError('Slider still present after 3 attempts')
         finally:
             await page.close()
     
@@ -139,5 +136,18 @@ class SliderCaptchaSolver(BaseSolver):
         for selector in selectors:
             locator = page.locator(selector)
             if await locator.count() > 0:
-                return locator
+                # .first: a generic selector ([role="slider"]) may match several
+                # elements, and bounding_box() on such a locator is a strict-mode error
+                return locator.first
         raise LookupError(f'No element found for selectors: {selectors}')
+
+
+def _selectors(value: Any, default: List[str], field: str) -> List[str]:
+    """Selector override from input_data: None -> default, str -> [str], list of str."""
+    if value is None:
+        return default
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list) or not value or not all(isinstance(v, str) and v for v in value):
+        raise ValueError(f'{field} must be a non-empty string or list of strings')
+    return value

@@ -28,7 +28,8 @@ def mock_page():
 @pytest.fixture
 def mock_browser_manager(mock_page):
     """Mock browser_manager to return mock_page."""
-    with patch('workers.solvers.slider.browser_manager') as mock_bm:
+    with patch('workers.solvers.slider.browser_manager') as mock_bm, \
+            patch('workers.solvers.slider.validate_page_url', side_effect=lambda url: url):
         mock_bm.new_page = AsyncMock(return_value=mock_page)
         yield mock_bm
 
@@ -86,18 +87,17 @@ class TestSliderCaptchaSolver:
         # Mock _drag_slider to succeed but slider remains
         solver._drag_slider = AsyncMock()
         
-        result = await solver.solve({'page_url': 'https://example.com'})
+        with pytest.raises(RuntimeError, match='Slider still present after 3 attempts'):
+            await solver.solve({'page_url': 'https://example.com'})
         
-        assert result['success'] is False
-        assert 'error' in result
         assert solver._drag_slider.call_count == 3
+        mock_page.close.assert_awaited_once()
     
     @pytest.mark.asyncio
     async def test_solve_missing_page_url(self, solver):
-        """Test solver returns error when page_url is missing."""
-        result = await solver.solve({})
-        assert result['success'] is False
-        assert result['error'] == 'page_url is required'
+        """Test solver raises when page_url is missing."""
+        with pytest.raises(ValueError, match='page_url is required'):
+            await solver.solve({})
     
     @pytest.mark.asyncio
     async def test_drag_slider_human_like(self, solver, mock_page):
@@ -154,7 +154,7 @@ class TestSliderCaptchaSolver:
         mock_page.locator.side_effect = [mock_locator1, mock_locator2]
         
         result = await solver._locate(mock_page, ['#first', '#second'])
-        assert result == mock_locator1
+        assert result == mock_locator1.first
     
     @pytest.mark.asyncio
     async def test_locate_no_match(self, solver, mock_page):
@@ -184,6 +184,38 @@ class TestSliderCaptchaSolver:
         call_args = solver._drag_slider.call_args
         assert call_args[0][1] == ['#custom-handle']
         assert call_args[0][2] == ['#custom-track']
+
+
+    @pytest.mark.asyncio
+    async def test_drag_errors_raise_after_last_attempt(self, solver, mock_page, mock_browser_manager):
+        """A drag that keeps failing ends the task as failed, page closed."""
+        solver._drag_slider = AsyncMock(side_effect=LookupError('No element found'))
+        
+        with pytest.raises(RuntimeError, match='Slider solve failed: No element found'):
+            await solver.solve({'page_url': 'https://example.com'})
+        
+        assert solver._drag_slider.call_count == 3
+        mock_page.close.assert_awaited_once()
+    
+    @pytest.mark.asyncio
+    async def test_page_url_goes_through_ssrf_guard(self, solver):
+        """A private page_url is rejected before a browser page is opened."""
+        from workers.solvers.url_guard import PageURLRejected
+        with patch('workers.solvers.slider.browser_manager') as mock_bm:
+            mock_bm.new_page = AsyncMock()
+            with pytest.raises(PageURLRejected):
+                await solver.solve({'page_url': 'http://127.0.0.1:8000/'})
+            mock_bm.new_page.assert_not_called()
+    
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('bad', [123, [], [''], ['#ok', 5], {'a': 1}])
+    async def test_invalid_selector_override_rejected(self, solver, bad):
+        """Selector overrides must be a non-empty string or list of strings."""
+        with patch('workers.solvers.slider.browser_manager') as mock_bm:
+            mock_bm.new_page = AsyncMock()
+            with pytest.raises(ValueError, match='handle_selector'):
+                await solver.solve({'page_url': 'https://example.com', 'handle_selector': bad})
+            mock_bm.new_page.assert_not_called()
 
 
 class TestSliderMovement:
