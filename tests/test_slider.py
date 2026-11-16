@@ -22,6 +22,8 @@ def mock_page():
     page.mouse.up = AsyncMock()
     page.wait_for_timeout = AsyncMock()
     page.locator = MagicMock()
+    # nothing on the page unless a test says otherwise (the nc markers included)
+    page.locator.return_value.count = AsyncMock(return_value=0)
     page.goto = AsyncMock()
     page.close = AsyncMock()
     page.url = 'https://example.com/'
@@ -291,21 +293,21 @@ def _cookie(domain, name='c'):
 
 
 class TestSettle:
-    """The handle must stay invisible for SETTLE_MS before success."""
+    """The page must look passed for the whole SETTLE_MS before success."""
 
     @pytest.mark.asyncio
-    async def test_handle_back_during_settle_is_not_success(self, solver, mock_page):
-        # hidden at first, visible again at the last poll of the window
+    async def test_failure_during_settle_is_not_success(self, solver, mock_page):
+        # passed at first, not passed at the last poll of the window
         polls = SETTLE_MS // SETTLE_POLL_MS + 1
-        solver._visible_handle = AsyncMock(side_effect=[False] * (polls - 1) + [True])
-        assert await solver._handle_stays_hidden(mock_page, ['#h']) is False
+        solver._passed = AsyncMock(side_effect=[True] * (polls - 1) + [False])
+        assert await solver._stays_passed(mock_page, ['#h']) is False
 
     @pytest.mark.asyncio
-    async def test_hidden_for_whole_window_is_success(self, solver, mock_page):
+    async def test_passed_for_whole_window_is_success(self, solver, mock_page):
         polls = SETTLE_MS // SETTLE_POLL_MS + 1
-        solver._visible_handle = AsyncMock(return_value=False)
-        assert await solver._handle_stays_hidden(mock_page, ['#h']) is True
-        assert solver._visible_handle.await_count == polls
+        solver._passed = AsyncMock(return_value=True)
+        assert await solver._stays_passed(mock_page, ['#h']) is True
+        assert solver._passed.await_count == polls
         waits = [c.args[0] for c in mock_page.wait_for_timeout.await_args_list]
         assert sum(waits) >= SETTLE_MS
 

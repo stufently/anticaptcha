@@ -16,6 +16,15 @@ GOTO_TIMEOUT_MS = 30000
 SETTLE_MS = 3000
 SETTLE_POLL_MS = 500
 
+# Alibaba nc (AWSC nc 1.97.0 and the older sd/ncpc nc.js on g.alicdn.com) keeps
+# the handle VISIBLE after a pass: the same span#nc_1_n1z only changes class
+# btn_slide -> btn_ok and the text becomes "验证通过". A reject or block
+# replaces the whole slider with div.errloading ("验证失败，点击框体重试"), which
+# removes the handle. Both checked in the widget source and live (demo appkey
+# with TEST_PASS / TEST_BLOCK).
+NC_PASSED = '.nc_scale .btn_ok'
+NC_FAILED = '.nc-container .errloading'
+
 
 class SliderCaptchaSolver(BaseSolver):
     """
@@ -81,11 +90,13 @@ class SliderCaptchaSolver(BaseSolver):
                 try:
                     await self._drag_slider(page, handle_selectors, track_selectors)
                     
-                    # Success = no VISIBLE handle left. Tracks are not checked:
-                    # Alibaba nc keeps its track (.nc_scale, #nc_1__scale_text)
-                    # in the DOM after a pass. Same handle selectors as the drag:
-                    # custom ones are invisible to the defaults.
-                    if await self._handle_stays_hidden(page, handle_selectors):
+                    # Success = no VISIBLE handle left, or the nc pass marker;
+                    # an nc failure box is never a success (see NC_PASSED).
+                    # Tracks are not checked: Alibaba nc keeps its track
+                    # (.nc_scale, #nc_1__scale_text) after a pass. Same handle
+                    # selectors as the drag: custom ones are invisible to the
+                    # defaults.
+                    if await self._stays_passed(page, handle_selectors):
                         return await self._result(page, user_agent)
                 except Exception as e:
                     if attempt == 2:  # Last attempt
@@ -171,12 +182,29 @@ class SliderCaptchaSolver(BaseSolver):
             return False
         return True
 
-    async def _handle_stays_hidden(self, page: Page, selectors: List[str]) -> bool:
-        """No visible handle now and at every poll for SETTLE_MS."""
+    async def _passed(self, page: Page, selectors: List[str]) -> bool:
+        """One look at the page: nc says passed, or no handle is visible and
+        nc does not show its failure box."""
+        if await self._visible(page, NC_PASSED):
+            return True
+        if await self._visible(page, NC_FAILED):
+            return False
+        return not await self._visible_handle(page, selectors)
+
+    async def _visible(self, page: Page, selector: str) -> bool:
+        """True if any element matching selector is visible."""
+        locator = page.locator(selector)
+        for i in range(await locator.count()):
+            if await locator.nth(i).is_visible():
+                return True
+        return False
+
+    async def _stays_passed(self, page: Page, selectors: List[str]) -> bool:
+        """Passed now and at every poll for SETTLE_MS."""
         for waited in range(0, SETTLE_MS + 1, SETTLE_POLL_MS):
             if waited:
                 await page.wait_for_timeout(SETTLE_POLL_MS)
-            if await self._visible_handle(page, selectors):
+            if not await self._passed(page, selectors):
                 return False
         return True
 
