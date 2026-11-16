@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.3.3] — 2026-11-16
+
 ### Added — 2026-11-16
 - Чарт: необязательная egress NetworkPolicy воркера
   (`chart/templates/networkpolicy-worker.yaml`, `networkPolicy.enabled`, по
