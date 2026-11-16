@@ -3,6 +3,7 @@ import asyncio
 import math
 import random
 from typing import Optional, List, Dict, Any
+from urllib.parse import urlsplit
 from playwright.async_api import Page, Locator
 
 from .base import BaseSolver
@@ -46,7 +47,11 @@ class SliderCaptchaSolver(BaseSolver):
             }
         
         Returns:
-            {"success": True}; any failure raises, so the task ends as failed
+            {"success": True, "cookies": [...], "url": str, "user_agent": str}:
+            cookies of the final page's host (see _page_cookies), the final
+            page.url and the browser's navigator.userAgent, so the client can
+            continue the session the worker unlocked. Any failure raises, so
+            the task ends as failed.
         """
         page_url = input_data.get('page_url')
         if not page_url:
@@ -63,16 +68,21 @@ class SliderCaptchaSolver(BaseSolver):
         
         try:
             await page.goto(page_url, timeout=GOTO_TIMEOUT_MS, wait_until='domcontentloaded')
+            # Read before the drag: a page that navigates on a pass would
+            # destroy the execution context, and the value does not change.
+            user_agent = await page.evaluate('navigator.userAgent')
             await page.wait_for_timeout(1000)
             
             for attempt in range(3):
                 try:
                     await self._drag_slider(page, handle_selectors, track_selectors)
                     
-                    # Check if slider is still present
-                    # Same selectors as the drag: custom ones are invisible to the defaults
-                    if not await self.detect(page, handle_selectors + track_selectors):
-                        return {'success': True}
+                    # Success = no VISIBLE handle left. Tracks are not checked:
+                    # Alibaba nc keeps its track (.nc_scale, #nc_1__scale_text)
+                    # in the DOM after a pass. Same handle selectors as the drag:
+                    # custom ones are invisible to the defaults.
+                    if not await self._visible_handle(page, handle_selectors):
+                        return await self._result(page, user_agent)
                 except Exception as e:
                     if attempt == 2:  # Last attempt
                         raise RuntimeError(f'Slider solve failed: {e}') from e
@@ -134,14 +144,60 @@ class SliderCaptchaSolver(BaseSolver):
         await page.wait_for_timeout(1500)
     
     async def _locate(self, page: Page, selectors: List[str]) -> Locator:
-        """Locate first matching element from selector list."""
+        """First VISIBLE element over the selector list, in selector order.
+
+        A selector may match several elements ([role="slider"], a hidden
+        template copy before the live widget): each match is checked with
+        is_visible(), and a single element (nth) avoids the strict-mode error
+        bounding_box() raises on a multi-element locator.
+        """
         for selector in selectors:
             locator = page.locator(selector)
-            if await locator.count() > 0:
-                # .first: a generic selector ([role="slider"]) may match several
-                # elements, and bounding_box() on such a locator is a strict-mode error
-                return locator.first
-        raise LookupError(f'No element found for selectors: {selectors}')
+            for i in range(await locator.count()):
+                element = locator.nth(i)
+                if await element.is_visible():
+                    return element
+        raise LookupError(f'No visible element found for selectors: {selectors}')
+
+    async def _visible_handle(self, page: Page, selectors: List[str]) -> bool:
+        """True while any handle selector still matches a visible element."""
+        try:
+            await self._locate(page, selectors)
+        except LookupError:
+            return False
+        return True
+
+    async def _result(self, page: Page, user_agent: str) -> Dict[str, Any]:
+        """Success payload: what the client needs to reuse the unlocked session.
+        page.url and context cookies need no JS context, so a page that is
+        navigating after the pass does not turn success into a retry."""
+        url = page.url
+        return {
+            'success': True,
+            'cookies': _page_cookies(await page.context.cookies(), url),
+            'url': url,
+            'user_agent': user_agent,
+        }
+
+
+def _page_cookies(cookies: List[Dict[str, Any]], page_url: str) -> List[Dict[str, Any]]:
+    """Cookies of the page's host only: the host itself, its subdomains and the
+    parent domains the browser would send to the page (a cookie set for
+    .example.com by www.example.com). Chromium never stores a cookie for a
+    public suffix, so a parent domain here is a real site. Cookies of other
+    sites in the context (third-party frames, redirects passed on the way) are
+    dropped."""
+    host = (urlsplit(page_url).hostname or '').lower()
+    if not host:
+        return []
+    kept = []
+    for cookie in cookies:
+        domain = (cookie.get('domain') or '').lower().lstrip('.')
+        if not domain:
+            continue
+        if domain == host or host.endswith('.' + domain) or domain.endswith('.' + host):
+            kept.append(cookie)
+    return kept
 
 
 def _selectors(value: Any, default: List[str], field: str) -> List[str]:

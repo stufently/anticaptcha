@@ -160,7 +160,7 @@ API: ошибка в них даёт задачу со статусом `failed`
 |---|---|
 | `recaptcha_v2`, `recaptcha_v3`, `hcaptcha`, `turnstile`, `yandex_smartcaptcha` | `{"token": "..."}` |
 | `image_text` | `{"text": "..."}` (пустая строка, если OCR ничего не нашёл) |
-| `slider` | `{"success": true}` — токена нет; неудача даёт `failed` |
+| `slider` | `{"success": true, "cookies": [...], "url": "...", "user_agent": "..."}` — cookies (формат Playwright) хоста итоговой страницы, его поддоменов и родительских доменов, итоговый URL и `navigator.userAgent` браузера воркера; токена нет; неудача даёт `failed` |
 
 ### POST /api/v1/user, POST /api/v1/api-key/{user_id}, GET /api/v1/api-keys/{user_id}
 Управление пользователями и ключами — см. «Authentication».
@@ -192,7 +192,7 @@ Swagger UI — `/docs`, ReDoc — `/redoc`.
 | `hcaptcha` | hCaptcha | только поток чекбокса; интерактивный image-челлендж не поддерживается |
 | `turnstile` | Cloudflare Turnstile | |
 | `yandex_smartcaptcha` | Yandex SmartCaptcha | с датацентрового IP нужен резидентный `proxy`; силуэты не решаются |
-| `slider` | Слайдер-CAPTCHA (AliExpress, Alibaba и др.) | нужен только `page_url`; токена нет |
+| `slider` | Слайдер-CAPTCHA (AliExpress, Alibaba и др.) | нужен только `page_url`; токена нет, результат — cookies сессии, URL и User-Agent |
 | `image_text` | Текст на картинке (OCR) | |
 
 Других типов API не принимает (`POST /task` → 422); подробности и состояние

@@ -214,3 +214,10 @@ def test_W17_redact_nested_dict():
     source = {"nested": {"token": "T" * 40, "short": "ok"}}
     assert _redact(source) == {"nested": {"token": "<40 chars>", "short": "ok"}}
     assert source["nested"]["token"] == "T" * 40
+
+
+def test_W18_redact_hides_slider_cookies_whatever_their_length():
+    """A short cookie value is still a session: the log gets the count only."""
+    source = {"success": True, "url": "https://a.example/",
+              "cookies": [{"name": "sid", "value": "abc123", "domain": "a.example"}]}
+    assert _redact(source) == {"success": True, "url": "<18 chars>", "cookies": "<1 cookies>"}

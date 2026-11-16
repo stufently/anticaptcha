@@ -65,8 +65,12 @@ def _redact_value(value: Any) -> Any:
 
 
 def _redact(result: Dict[str, Any]) -> Dict[str, Any]:
-    """Copy of a solver result safe to print; the task row keeps the real one."""
-    return {k: _redact_value(v) for k, v in result.items()}
+    """Copy of a solver result safe to print; the task row keeps the real one.
+    Cookies (slider) are a session whatever their length: only their count."""
+    return {
+        k: f"<{len(v)} cookies>" if k == "cookies" and isinstance(v, list) else _redact_value(v)
+        for k, v in result.items()
+    }
 
 
 class TaskWorker:

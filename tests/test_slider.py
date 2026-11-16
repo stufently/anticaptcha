@@ -1,7 +1,7 @@
 """Tests for slider CAPTCHA solver."""
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from workers.solvers.slider import GOTO_TIMEOUT_MS, SliderCaptchaSolver
+from workers.solvers.slider import GOTO_TIMEOUT_MS, SliderCaptchaSolver, _page_cookies
 
 
 @pytest.fixture
@@ -22,6 +22,10 @@ def mock_page():
     page.locator = MagicMock()
     page.goto = AsyncMock()
     page.close = AsyncMock()
+    page.url = 'https://example.com/'
+    page.context = MagicMock()
+    page.context.cookies = AsyncMock(return_value=[])
+    page.evaluate = AsyncMock(return_value='UA/1.0')
     return page
 
 
@@ -62,21 +66,37 @@ class TestSliderCaptchaSolver:
     @pytest.mark.asyncio
     async def test_solve_success(self, solver, mock_page, mock_browser_manager):
         """Test successful slider solve."""
-        # detect() runs only after a drag: slider gone after the first one
-        solver.detect = AsyncMock(return_value=False)
+        # The visibility check runs only after a drag: handle gone after the first one
+        solver._visible_handle = AsyncMock(return_value=False)
         solver._drag_slider = AsyncMock()
+        mock_page.url = 'https://shop.example.com/item?id=1'
+        mock_page.context.cookies = AsyncMock(return_value=[
+            {'name': 'own', 'value': '1', 'domain': 'shop.example.com', 'path': '/'},
+            {'name': 'parent', 'value': '2', 'domain': '.example.com', 'path': '/'},
+            {'name': 'tracker', 'value': '3', 'domain': '.tracker.test', 'path': '/'},
+        ])
+        mock_page.evaluate = AsyncMock(return_value='Mozilla/5.0 test')
         
-        result = await solver.solve({'page_url': 'https://example.com'})
+        result = await solver.solve({'page_url': 'https://shop.example.com/item?id=1'})
         
-        assert result == {'success': True}
+        assert result == {
+            'success': True,
+            'cookies': [
+                {'name': 'own', 'value': '1', 'domain': 'shop.example.com', 'path': '/'},
+                {'name': 'parent', 'value': '2', 'domain': '.example.com', 'path': '/'},
+            ],
+            'url': 'https://shop.example.com/item?id=1',
+            'user_agent': 'Mozilla/5.0 test',
+        }
+        mock_page.evaluate.assert_awaited_once_with('navigator.userAgent')
         assert solver._drag_slider.call_count == 1
         mock_page.close.assert_awaited_once()
     
     @pytest.mark.asyncio
     async def test_solve_failure_after_retries(self, solver, mock_page, mock_browser_manager):
         """Test solver returns failure after 3 attempts."""
-        # Mock detection to always return True (slider still present)
-        solver.detect = AsyncMock(return_value=True)
+        # The handle stays visible after every drag
+        solver._visible_handle = AsyncMock(return_value=True)
         
         # Mock _drag_slider to succeed but slider remains
         solver._drag_slider = AsyncMock()
@@ -135,20 +155,19 @@ class TestSliderCaptchaSolver:
             await solver._drag_slider(mock_page)
     
     @pytest.mark.asyncio
-    async def test_locate_first_match(self, solver, mock_page):
-        """Test _locate returns first matching element."""
-        # First selector matches
+    async def test_locate_first_visible_match(self, solver, mock_page):
+        """_locate skips hidden matches and returns the first visible one."""
+        hidden, visible = MagicMock(), MagicMock()
+        hidden.is_visible = AsyncMock(return_value=False)
+        visible.is_visible = AsyncMock(return_value=True)
         mock_locator1 = MagicMock()
-        mock_locator1.count = AsyncMock(return_value=1)
-        
-        # Second selector doesn't match
-        mock_locator2 = MagicMock()
-        mock_locator2.count = AsyncMock(return_value=0)
-        
-        mock_page.locator.side_effect = [mock_locator1, mock_locator2]
+        mock_locator1.count = AsyncMock(return_value=2)
+        mock_locator1.nth = MagicMock(side_effect=[hidden, visible])
+        mock_page.locator.return_value = mock_locator1
         
         result = await solver._locate(mock_page, ['#first', '#second'])
-        assert result == mock_locator1.first
+        assert result is visible
+        mock_page.locator.assert_called_once_with('#first')
     
     @pytest.mark.asyncio
     async def test_locate_no_match(self, solver, mock_page):
@@ -158,13 +177,26 @@ class TestSliderCaptchaSolver:
         mock_locator.count = AsyncMock(return_value=0)
         mock_page.locator.return_value = mock_locator
         
-        with pytest.raises(LookupError, match='No element found'):
+        with pytest.raises(LookupError, match='No visible element found'):
             await solver._locate(mock_page, ['#first', '#second'])
+
+    @pytest.mark.asyncio
+    async def test_locate_only_hidden_matches(self, solver, mock_page):
+        """Matches that are all hidden are not a handle: LookupError."""
+        hidden = MagicMock()
+        hidden.is_visible = AsyncMock(return_value=False)
+        mock_locator = MagicMock()
+        mock_locator.count = AsyncMock(return_value=1)
+        mock_locator.nth = MagicMock(return_value=hidden)
+        mock_page.locator.return_value = mock_locator
+        
+        with pytest.raises(LookupError, match='No visible element found'):
+            await solver._locate(mock_page, ['#first'])
     
     @pytest.mark.asyncio
     async def test_custom_selectors(self, solver, mock_page, mock_browser_manager):
         """Test that custom selectors are used when provided."""
-        solver.detect = AsyncMock(return_value=False)
+        solver._visible_handle = AsyncMock(return_value=False)
         solver._drag_slider = AsyncMock()
         
         result = await solver.solve({
@@ -178,6 +210,8 @@ class TestSliderCaptchaSolver:
         call_args = solver._drag_slider.call_args
         assert call_args[0][1] == ['#custom-handle']
         assert call_args[0][2] == ['#custom-track']
+        # Success check looks at the custom handle only, never at the track
+        solver._visible_handle.assert_awaited_once_with(mock_page, ['#custom-handle'])
 
 
     @pytest.mark.asyncio
@@ -215,7 +249,7 @@ class TestSliderCaptchaSolver:
     async def test_goto_uses_guarded_url_and_timeout(self, solver, mock_page):
         """The browser opens the URL the guard RETURNS (normalized), bounded by
         the navigation timeout."""
-        solver.detect = AsyncMock(return_value=False)
+        solver._visible_handle = AsyncMock(return_value=False)
         solver._drag_slider = AsyncMock()
         with patch('workers.solvers.slider.browser_manager') as mock_bm, \
                 patch('workers.solvers.slider.validate_page_url',
@@ -233,6 +267,9 @@ class TestSliderCaptchaSolver:
         def locator(selector):
             loc = MagicMock()
             loc.count = AsyncMock(return_value=1 if selector == '#custom-handle' else 0)
+            element = MagicMock()
+            element.is_visible = AsyncMock(return_value=True)
+            loc.nth = MagicMock(return_value=element)
             return loc
         mock_page.locator = MagicMock(side_effect=locator)
         solver._drag_slider = AsyncMock()
@@ -243,6 +280,37 @@ class TestSliderCaptchaSolver:
                 'handle_selector': '#custom-handle',
                 'track_selector': '#custom-track',
             })
+
+
+def _cookie(domain, name='c'):
+    return {'name': name, 'value': 'v', 'domain': domain, 'path': '/'}
+
+
+class TestPageCookies:
+    """Result cookies: the page host, its subdomains and parent domains only."""
+
+    def test_keeps_host_subdomain_and_parent(self):
+        cookies = [_cookie('www.example.com', 'host'), _cookie('.www.example.com', 'dot'),
+                   _cookie('.api.www.example.com', 'sub'), _cookie('.example.com', 'parent')]
+        assert _page_cookies(cookies, 'https://www.example.com/a') == cookies
+
+    @pytest.mark.parametrize('domain', [
+        'other.test', '.tracker.com',
+        'cdn.example.com',        # sibling of the page host
+        'evilwww.example.com',    # suffix without a dot boundary
+        'www.example.com.evil',   # page host as a prefix
+        'example.co',             # prefix of the parent
+        '',
+    ])
+    def test_drops_other_domains(self, domain):
+        assert _page_cookies([_cookie(domain)], 'https://www.example.com/') == []
+
+    def test_case_insensitive_and_port_ignored(self):
+        cookies = [_cookie('WWW.Example.COM')]
+        assert _page_cookies(cookies, 'https://www.example.com:8443/x') == cookies
+
+    def test_final_url_without_host_gives_no_cookies(self):
+        assert _page_cookies([_cookie('example.com')], 'about:blank') == []
 
 
 class TestSliderMovement:
