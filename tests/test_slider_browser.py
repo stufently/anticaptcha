@@ -76,6 +76,13 @@ function onPass() {{ handle.style.display = 'none'; }}
 # (c) The slider never accepts: the handle springs back after every drag.
 STUCK_PAGE = DUPLICATE_PAGE.replace('PASSES = true', 'PASSES = false')
 
+# (d) The widget hides the handle while it "verifies" (longer than the 1.5 s
+# wait after the drag) and then rejects: the handle comes back.
+REJECT_LATE_PAGE = DUPLICATE_PAGE.replace(
+    "function onPass() { handle.style.display = 'none'; }",
+    "function onPass() { handle.style.display = 'none';"
+    " setTimeout(() => { handle.style.left = '0px'; handle.style.display = ''; }, 2500); }")
+
 
 def run_page(monkeypatch, html, *, after_page=None):
     """Solve PAGE_URL served as `html`; returns (result or exception, info)."""
@@ -102,6 +109,7 @@ def run_page(monkeypatch, html, *, after_page=None):
                 {'name': 'sibling', 'value': 'y', 'domain': 'cdn.slider.test', 'path': '/'},
                 {'name': 'sub', 'value': 'z', 'domain': 'api.www.slider.test', 'path': '/'},
                 {'name': 'parent', 'value': '1', 'domain': '.slider.test', 'path': '/'},
+                {'name': 'parent_host', 'value': 'h', 'domain': 'slider.test', 'path': '/'},
             ])
             await page.route(ORIGIN + '/**', serve)
             original_goto = page.goto
@@ -186,4 +194,12 @@ def test_slider_that_stays_is_failed(monkeypatch):
     assert isinstance(result, RuntimeError)
     assert str(result) == 'Slider still present after 3 attempts'
     # every attempt really dragged the visible handle
+    assert info['drags'] == 3
+
+
+def test_handle_hidden_during_verification_then_back_is_failed(monkeypatch):
+    result, info = run_page(monkeypatch, REJECT_LATE_PAGE)
+
+    assert isinstance(result, RuntimeError)
+    assert str(result) == 'Slider still present after 3 attempts'
     assert info['drags'] == 3

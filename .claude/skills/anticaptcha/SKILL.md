@@ -160,7 +160,7 @@ API: ошибка в них даёт задачу со статусом `failed`
 |---|---|
 | `recaptcha_v2`, `recaptcha_v3`, `hcaptcha`, `turnstile`, `yandex_smartcaptcha` | `{"token": "..."}` |
 | `image_text` | `{"text": "..."}` (пустая строка, если OCR ничего не нашёл) |
-| `slider` | `{"success": true, "cookies": [...], "url": "...", "user_agent": "..."}` — cookies (формат Playwright) хоста итоговой страницы, его поддоменов и родительских доменов, итоговый URL и `navigator.userAgent` браузера воркера; токена нет; неудача даёт `failed` |
+| `slider` | `{"success": true, "cookies": [...], "url": "...", "user_agent": "..."}` — cookies (формат Playwright) хоста итоговой страницы, его поддоменов и родительского домена (`Domain=`), итоговый URL и `navigator.userAgent` браузера воркера; токена нет; неудача даёт `failed` |
 
 ### POST /api/v1/user, POST /api/v1/api-key/{user_id}, GET /api/v1/api-keys/{user_id}
 Управление пользователями и ключами — см. «Authentication».

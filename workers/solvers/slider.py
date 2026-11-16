@@ -11,6 +11,10 @@ from app.utils.browser import browser_manager
 from workers.solvers.url_guard import validate_page_url
 
 GOTO_TIMEOUT_MS = 30000
+# After the drag the handle must stay invisible this long to count as a pass:
+# a widget may hide the handle while it verifies and show it again on a reject.
+SETTLE_MS = 3000
+SETTLE_POLL_MS = 500
 
 
 class SliderCaptchaSolver(BaseSolver):
@@ -81,7 +85,7 @@ class SliderCaptchaSolver(BaseSolver):
                     # Alibaba nc keeps its track (.nc_scale, #nc_1__scale_text)
                     # in the DOM after a pass. Same handle selectors as the drag:
                     # custom ones are invisible to the defaults.
-                    if not await self._visible_handle(page, handle_selectors):
+                    if await self._handle_stays_hidden(page, handle_selectors):
                         return await self._result(page, user_agent)
                 except Exception as e:
                     if attempt == 2:  # Last attempt
@@ -167,6 +171,15 @@ class SliderCaptchaSolver(BaseSolver):
             return False
         return True
 
+    async def _handle_stays_hidden(self, page: Page, selectors: List[str]) -> bool:
+        """No visible handle now and at every poll for SETTLE_MS."""
+        for waited in range(0, SETTLE_MS + 1, SETTLE_POLL_MS):
+            if waited:
+                await page.wait_for_timeout(SETTLE_POLL_MS)
+            if await self._visible_handle(page, selectors):
+                return False
+        return True
+
     async def _result(self, page: Page, user_agent: str) -> Dict[str, Any]:
         """Success payload: what the client needs to reuse the unlocked session.
         page.url and context cookies need no JS context, so a page that is
@@ -182,9 +195,11 @@ class SliderCaptchaSolver(BaseSolver):
 
 def _page_cookies(cookies: List[Dict[str, Any]], page_url: str) -> List[Dict[str, Any]]:
     """Cookies of the page's host only: the host itself, its subdomains and the
-    parent domains the browser would send to the page (a cookie set for
-    .example.com by www.example.com). Chromium never stores a cookie for a
-    public suffix, so a parent domain here is a real site. Cookies of other
+    parent-domain cookies the browser would send to the page (Domain=example.com
+    set by www.example.com; Playwright reports such a cookie with a leading dot).
+    A host-only cookie of a parent HOST (`example.com` without the dot) is not
+    sent to www.example.com and is dropped. Chromium never stores a cookie for
+    a public suffix, so a parent domain here is a real site. Cookies of other
     sites in the context (third-party frames, redirects passed on the way) are
     dropped."""
     host = (urlsplit(page_url).hostname or '').lower()
@@ -192,10 +207,12 @@ def _page_cookies(cookies: List[Dict[str, Any]], page_url: str) -> List[Dict[str
         return []
     kept = []
     for cookie in cookies:
-        domain = (cookie.get('domain') or '').lower().lstrip('.')
+        raw = (cookie.get('domain') or '').lower()
+        domain = raw.lstrip('.')
         if not domain:
             continue
-        if domain == host or host.endswith('.' + domain) or domain.endswith('.' + host):
+        parent = raw.startswith('.') and host.endswith('.' + domain)
+        if domain == host or parent or domain.endswith('.' + host):
             kept.append(cookie)
     return kept
 

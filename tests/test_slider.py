@@ -1,7 +1,9 @@
 """Tests for slider CAPTCHA solver."""
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from workers.solvers.slider import GOTO_TIMEOUT_MS, SliderCaptchaSolver, _page_cookies
+from workers.solvers.slider import (
+    GOTO_TIMEOUT_MS, SETTLE_MS, SETTLE_POLL_MS, SliderCaptchaSolver, _page_cookies,
+)
 
 
 @pytest.fixture
@@ -211,7 +213,9 @@ class TestSliderCaptchaSolver:
         assert call_args[0][1] == ['#custom-handle']
         assert call_args[0][2] == ['#custom-track']
         # Success check looks at the custom handle only, never at the track
-        solver._visible_handle.assert_awaited_once_with(mock_page, ['#custom-handle'])
+        assert solver._visible_handle.await_args_list
+        assert all(c.args == (mock_page, ['#custom-handle'])
+                   for c in solver._visible_handle.await_args_list)
 
 
     @pytest.mark.asyncio
@@ -286,6 +290,26 @@ def _cookie(domain, name='c'):
     return {'name': name, 'value': 'v', 'domain': domain, 'path': '/'}
 
 
+class TestSettle:
+    """The handle must stay invisible for SETTLE_MS before success."""
+
+    @pytest.mark.asyncio
+    async def test_handle_back_during_settle_is_not_success(self, solver, mock_page):
+        # hidden at first, visible again at the last poll of the window
+        polls = SETTLE_MS // SETTLE_POLL_MS + 1
+        solver._visible_handle = AsyncMock(side_effect=[False] * (polls - 1) + [True])
+        assert await solver._handle_stays_hidden(mock_page, ['#h']) is False
+
+    @pytest.mark.asyncio
+    async def test_hidden_for_whole_window_is_success(self, solver, mock_page):
+        polls = SETTLE_MS // SETTLE_POLL_MS + 1
+        solver._visible_handle = AsyncMock(return_value=False)
+        assert await solver._handle_stays_hidden(mock_page, ['#h']) is True
+        assert solver._visible_handle.await_count == polls
+        waits = [c.args[0] for c in mock_page.wait_for_timeout.await_args_list]
+        assert sum(waits) >= SETTLE_MS
+
+
 class TestPageCookies:
     """Result cookies: the page host, its subdomains and parent domains only."""
 
@@ -296,6 +320,7 @@ class TestPageCookies:
 
     @pytest.mark.parametrize('domain', [
         'other.test', '.tracker.com',
+        'example.com',            # host-only cookie of the parent HOST: not sent to www
         'cdn.example.com',        # sibling of the page host
         'evilwww.example.com',    # suffix without a dot boundary
         'www.example.com.evil',   # page host as a prefix
