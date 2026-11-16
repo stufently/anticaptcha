@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Fixed — 2026-11-16
+- `docker-compose.yml`: `docker compose up` падал без `POSTGRES_PASSWORD` — его
+  требовал сервис `postgres` даже вне своего профиля; профиль `with-nginx`
+  ссылался на несуществующий сервис `anticaptcha` (`depends_on` и upstream в
+  `nginx.conf`, теперь `anticaptcha-api`). Воркер больше не получает
+  `ANTICAPTCHA_ADMIN_TOKEN` (как в чарте с 1.3.2). Подсказка про Vision LLM
+  называла `QWEN_API_KEY` — ключ читается из `BAILIAN_CODING_PLAN_API_KEY`.
+
+### Removed — 2026-11-16
+- Из `docker-compose.yml` убраны сервисы `postgres` и `redis` (профили
+  `with-postgres`, `with-redis`) и неиспользуемый том `anticaptcha-models`: код
+  работает только с SQLite и Redis не использует.
+
 ## [1.3.3] — 2026-11-16
 
 ### Added — 2026-11-16
