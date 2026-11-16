@@ -129,30 +129,51 @@ def test_http_headers_match_navigator_without_headless(kwargs):
             assert not any('headless' in v.lower() for v in headers.values()), (path, headers)
 
 
+async def _popup_settled(manager):
+    """Wait until the popup hook of the manager has finished (bounded)."""
+    for _ in range(100):
+        if not manager._popup_tasks:
+            return
+        await asyncio.sleep(0.05)
+    raise AssertionError('popup identity hook still running')
+
+
 @pytest.mark.parametrize('proxy', [None, DEAD_PROXY], ids=['plain', 'proxy-context'])
-def test_popup_user_agent_is_not_headless(proxy):
-    """Popups bypass new_page(): the context's user_agent still covers them."""
+def test_popup_gets_the_identity_of_its_opener(proxy):
+    """Popups bypass new_page(): the context's 'page' hook gives them the same
+    UA and client hints. Requests after the hook carry them;
+    the popup's first load can go out before it (see _follow_popups), so only
+    its User-Agent is checked there."""
     async def scenario(echo):
         manager = BrowserManager()
         try:
             page = await manager.new_page(proxy=proxy)
             await page.goto(echo.base + '/fetch')
+            opener = await page.evaluate(NAVIGATOR_JS)
             async with page.expect_popup() as popup_info:
                 await page.evaluate(f'window.open("{echo.base}/popup")')
             popup = await popup_info.value
             await popup.wait_for_load_state()
-            ua = await page.evaluate('navigator.userAgent')
+            await _popup_settled(manager)
+            await popup.evaluate('fetch("/popup-later").then(r => r.text())')
+            in_popup = await popup.evaluate(NAVIGATOR_JS)
             await manager.close_page(page)
-            return ua
+            return opener, in_popup
         finally:
             await manager.close()
 
     with EchoServer() as echo:
-        page_ua = asyncio.run(scenario(echo))
-        popup_headers = echo.requests['/popup'][0]
+        opener, in_popup = asyncio.run(scenario(echo))
+        first = echo.requests['/popup'][0]
+        later = echo.requests['/popup-later'][0]
 
-    assert popup_headers['user-agent'] == page_ua
-    assert 'Headless' not in popup_headers['user-agent']
+    assert first['user-agent'] == opener['ua']
+    assert 'Headless' not in first['user-agent']
+    assert in_popup == opener
+    assert later['user-agent'] == in_popup['ua']
+    assert later['sec-ch-ua'] == sec_ch_ua(in_popup['brands'])
+    assert later['sec-ch-ua-platform'] == f'"{in_popup["platform"]}"'
+    assert not any('headless' in v.lower() for v in later.values()), later
 
 
 @pytest.mark.parametrize('proxy', [None, DEAD_PROXY], ids=['plain', 'proxy-context'])

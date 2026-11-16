@@ -77,6 +77,8 @@ class BrowserManager:
         self._context_cleanup = set()
         # (browser, task reading its identity): one probe per launched browser
         self._identity = None
+        # applies the identity to popups (window.open) of our pages
+        self._popup_tasks = set()
         self._stealth = Stealth(navigator_platform_override="Linux x86_64", webgl_vendor_override="Google Inc. (Intel)", webgl_renderer_override="ANGLE (Intel, Mesa Intel(R) UHD Graphics 620 (KBL GT2), OpenGL 4.6)") if HAS_STEALTH else None
         self._lock = asyncio.Lock()
 
@@ -170,7 +172,8 @@ class BrowserManager:
         Every page gets its own context (closed together with the page by
         close_page) and the browser identity: the HTTP User-Agent, the client
         hints and navigator.userAgent/userAgentData all say Chrome, never
-        HeadlessChrome, whatever ``stealth`` is.
+        HeadlessChrome, whatever ``stealth`` is. Popups the page opens get the
+        same identity, see _follow_popups.
 
         Args:
             stealth: Whether to apply stealth patches (default: True)
@@ -205,6 +208,7 @@ class BrowserManager:
             page = await browser.new_page(user_agent=identity.user_agent)
 
         try:
+            self._follow_popups(page.context, identity)
             await self._apply_identity(page, identity)
             if stealth and HAS_STEALTH and self._stealth:
                 await self._stealth.apply_stealth_async(page)
@@ -223,15 +227,42 @@ class BrowserManager:
         the brands given here both the headers and navigator.userAgentData
         report the same list. The CDP session must stay attached: Chromium drops
         a session's overrides when it detaches; it ends with the page.
-        Same-process frames (iframes, since site isolation is off) and
-        dedicated workers inherit it; popups and out-of-process frames get only
-        the context's User-Agent.
+        Same-process frames inherit it: all iframes, cross-site ones too, since
+        site isolation is off (no separate iframe targets exist, checked with
+        Target.getTargets), and dedicated workers.
         """
         session = await page.context.new_cdp_session(page)
         await session.send('Emulation.setUserAgentOverride', {
             'userAgent': identity.user_agent,
             'userAgentMetadata': identity.metadata,
         })
+
+    def _follow_popups(self, context: BrowserContext, identity: BrowserIdentity) -> None:
+        """Give every later page of this context (window.open popups, links
+        with target=_blank) the identity of new_page.
+
+        Playwright reports such a page only after Chromium has resumed it, so
+        the override lands while its first load is already running. Measured
+        with a local echo server: the popup's document, its subresources and
+        an early fetch went out with the right User-Agent, but with Chromium's
+        own client hints (Sec-CH-UA brand "HeadlessChrome"). Requests after the hook and
+        navigator.* of the popup match the opener. Rewriting the early headers
+        would take context-wide request routing (every request of every page
+        through the driver, HTTP cache off), so it is not done. Stealth scripts
+        are per page and do not reach popups either.
+        """
+        def on_page(page: Page) -> None:
+            task = asyncio.ensure_future(self._apply_popup_identity(page, identity))
+            self._popup_tasks.add(task)
+            task.add_done_callback(self._popup_tasks.discard)
+
+        context.on('page', on_page)
+
+    async def _apply_popup_identity(self, page: Page, identity: BrowserIdentity) -> None:
+        try:
+            await self._apply_identity(page, identity)
+        except Exception as exc:  # popup closed already, or the browser died
+            print(f'Popup identity not applied: {type(exc).__name__}', flush=True)
 
     async def _browser_identity(self, browser: Browser) -> BrowserIdentity:
         """Identity of this browser instance, read once and shared by all pages.
@@ -301,6 +332,8 @@ class BrowserManager:
             await asyncio.gather(entry[1], return_exceptions=True)
         if self._context_cleanup:
             await asyncio.gather(*tuple(self._context_cleanup))
+        if self._popup_tasks:
+            await asyncio.gather(*tuple(self._popup_tasks), return_exceptions=True)
         
         if self._playwright:
             await self._playwright.stop()
