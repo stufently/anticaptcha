@@ -4,7 +4,7 @@ import json
 import socket
 import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -249,8 +249,11 @@ def test_Y6b_proxy_pins_ip(monkeypatch):
 def test_Y7_proxy_context(monkeypatch):
     async def run():
         manager = BrowserManager()
-        page = SimpleNamespace(close=AsyncMock())
-        context = SimpleNamespace(new_page=AsyncMock(return_value=page), close=AsyncMock())
+        context = SimpleNamespace(new_page=AsyncMock(), close=AsyncMock(), on=MagicMock())
+        page = SimpleNamespace(close=AsyncMock(), context=context)
+        context.new_page.return_value = page
+        options = {'user_agent': 'UA', 'locale': 'en-US',
+                   'extra_http_headers': {'Accept-Language': 'en-US,en;q=0.9'}}
         browser = SimpleNamespace(new_context=AsyncMock(return_value=context),
                                   new_page=AsyncMock(return_value=page))
         monkeypatch.setattr(manager, 'get_browser', AsyncMock(return_value=browser))
@@ -260,15 +263,17 @@ def test_Y7_proxy_context(monkeypatch):
         proxy = {'server': 'http://8.8.8.8:8080'}
         try:
             assert await manager.new_page(stealth=False, proxy=proxy) is page
-            browser.new_context.assert_awaited_once_with(proxy=proxy, user_agent='UA')
+            browser.new_context.assert_awaited_once_with(proxy=proxy, **options)
             manager._apply_identity.assert_awaited_once_with(page, identity)
+            # popups of the page get the identity too
+            assert context.on.call_args.args[0] == 'page'
             await manager.close_page(page)
             page.close.assert_awaited_once()
             context.close.assert_awaited_once()
             browser.new_context.reset_mock()
             context.close.reset_mock()
             await manager.new_page(stealth=False)
-            browser.new_page.assert_awaited_once_with(user_agent='UA')
+            browser.new_page.assert_awaited_once_with(**options)
             browser.new_context.assert_not_awaited()
             await manager.close_page(page)
             context.close.assert_not_awaited()

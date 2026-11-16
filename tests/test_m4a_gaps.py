@@ -8,7 +8,7 @@ import json
 import socket
 import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy import create_engine
@@ -225,9 +225,10 @@ def _stub_identity(monkeypatch, manager):
 
 def _manager_with_proxy_context(monkeypatch, page=None, page_error=None):
     manager = BrowserManager()
-    page = page if page is not None else SimpleNamespace(close=AsyncMock())
     context = SimpleNamespace(
-        new_page=AsyncMock(return_value=page, side_effect=page_error), close=AsyncMock())
+        new_page=AsyncMock(side_effect=page_error), close=AsyncMock(), on=MagicMock())
+    page = page if page is not None else SimpleNamespace(close=AsyncMock(), context=context)
+    context.new_page.return_value = page
     browser = SimpleNamespace(new_context=AsyncMock(return_value=context),
                               new_page=AsyncMock(return_value=page))
     monkeypatch.setattr(manager, 'get_browser', AsyncMock(return_value=browser))
