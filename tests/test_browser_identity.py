@@ -26,7 +26,8 @@ NAVIGATOR_JS = """async () => {
   return {ua: navigator.userAgent,
           brands: d ? d.brands.map(b => ({brand: b.brand, version: b.version})) : null,
           mobile: d ? d.mobile : null, platform: d ? d.platform : null,
-          languages: Array.from(navigator.languages), language: navigator.language};
+          languages: Array.from(navigator.languages), language: navigator.language,
+          intl: Intl.DateTimeFormat().resolvedOptions().locale};
 }"""
 
 
@@ -167,6 +168,8 @@ def test_browser_locale_setting_drives_accept_language_and_navigator(monkeypatch
         requests = dict(echo.requests)
 
     assert nav['languages'] == ['de-DE', 'de'] and nav['language'] == 'de-DE'
+    # the context locale: Intl formats in the language the page is told about
+    assert nav['intl'] == 'de-DE'
     for path, seen in requests.items():
         for headers in seen:
             assert headers.get('accept-language') == 'de-DE,de;q=0.9', (path, headers)
