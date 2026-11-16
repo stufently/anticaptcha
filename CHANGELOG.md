@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Removed — 2026-11-16
+- Из корня репозитория удалены одноразовые скрипты ранней разработки, на которые
+  не ссылаются ни Dockerfile, ни CI, ни чарт, ни код, ни тесты: 21 файл
+  `test_*.py` (ручные прогоны по живым сайтам; `pytest tests` их не собирал),
+  `hybrid_classifier.py`, `quick_dataset_setup.py`, `benchmark_models.sh`, и
+  dev-отчёты `BENCHMARK_REPORT.md`, `FINAL_REPORT.md`, `MODEL_COMPARISON.md`,
+  `MODEL_TESTING_NOTES.md`, `PROJECT_REVIEW.md`, `STEALTH_INTEGRATION_REPORT.md`,
+  `TEST_REPORT.md`, `VK_TEST_RESULTS.md`, а также устаревший `README_SOLVER.md`
+  (описывал несуществующие `workers/solvers/yandex.py`, сигнатуру
+  `solve(page, frame, target=...)` и вывод тестов, которого нет). Оставлены
+  `init_db.py` и `run_worker.py` (копируются в образ, описаны в README),
+  `collect_recaptcha_dataset.py` и `train_yolo_recaptcha.sh`
+  (`docs/TRAINING_GUIDE.md`), `run.sh`.
+
 ## [1.3.2] — 2026-11-16
 
 Тип задачи `slider` и исправления ревью: сняты 21 нерабочий тип задач,
