@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.3.4] — 2026-11-16
+
 ### Changed — 2026-11-16
 - `slider`: результат успеха — `{"success": true, "cookies": [...], "url",
   "user_agent"}` вместо голого `{"success": true}`, чтобы клиент мог продолжить
