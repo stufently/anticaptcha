@@ -65,7 +65,7 @@ class TestSliderCaptchaSolver:
         # Mock detection to return False after drag (slider gone)
         detect_calls = [True, False]  # First call: present, second: gone
         
-        async def mock_detect(page):
+        async def mock_detect(page, selectors=None):
             return detect_calls.pop(0) if detect_calls else False
         
         solver.detect = mock_detect
@@ -216,6 +216,24 @@ class TestSliderCaptchaSolver:
             with pytest.raises(ValueError, match='handle_selector'):
                 await solver.solve({'page_url': 'https://example.com', 'handle_selector': bad})
             mock_bm.new_page.assert_not_called()
+
+
+    @pytest.mark.asyncio
+    async def test_custom_selectors_used_for_success_check(self, solver, mock_page, mock_browser_manager):
+        """A custom slider that is still on the page is not reported as solved."""
+        def locator(selector):
+            loc = MagicMock()
+            loc.count = AsyncMock(return_value=1 if selector == '#custom-handle' else 0)
+            return loc
+        mock_page.locator = MagicMock(side_effect=locator)
+        solver._drag_slider = AsyncMock()
+        
+        with pytest.raises(RuntimeError, match='Slider still present after 3 attempts'):
+            await solver.solve({
+                'page_url': 'https://example.com',
+                'handle_selector': '#custom-handle',
+                'track_selector': '#custom-track',
+            })
 
 
 class TestSliderMovement:

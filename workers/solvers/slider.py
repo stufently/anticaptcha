@@ -26,9 +26,10 @@ class SliderCaptchaSolver(BaseSolver):
     SLIDER_HANDLES = ['#nc_1_n1z', '.nc_iconfont.btn_slide', '[role="slider"]', '.slider-handle']
     SLIDER_TRACKS = ['#nc_1__scale_text', '.nc_scale', '.slider-track', '.slider-rail']
     
-    async def detect(self, page: Page) -> bool:
-        """Detect if slider CAPTCHA is present on the page."""
-        for selector in self.SLIDER_HANDLES + self.SLIDER_TRACKS:
+    async def detect(self, page: Page, selectors: Optional[List[str]] = None) -> bool:
+        """Detect if slider CAPTCHA is present on the page (default selectors
+        unless the caller passes the ones the task uses)."""
+        for selector in selectors or (self.SLIDER_HANDLES + self.SLIDER_TRACKS):
             if await page.locator(selector).count() > 0:
                 return True
         return False
@@ -69,7 +70,8 @@ class SliderCaptchaSolver(BaseSolver):
                     await self._drag_slider(page, handle_selectors, track_selectors)
                     
                     # Check if slider is still present
-                    if not await self.detect(page):
+                    # Same selectors as the drag: custom ones are invisible to the defaults
+                    if not await self.detect(page, handle_selectors + track_selectors):
                         return {'success': True}
                 except Exception as e:
                     if attempt == 2:  # Last attempt
