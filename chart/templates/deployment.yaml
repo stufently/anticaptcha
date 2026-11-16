@@ -138,6 +138,10 @@ spec:
             {{- end }}
             - name: ANTICAPTCHA_WORKER_HEARTBEAT_FILE
               value: {{ .Values.worker.heartbeatFile | quote }}
+            {{- /* An explicit env entry wins over envFrom: blank the token in
+                   case the Secret below carries it as a key. */}}
+            - name: ANTICAPTCHA_ADMIN_TOKEN
+              value: ""
           {{- if or .Values.configMap.enabled $workerSecret }}
           envFrom:
             {{- if .Values.configMap.enabled }}
