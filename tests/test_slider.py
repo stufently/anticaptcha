@@ -72,7 +72,7 @@ class TestSliderCaptchaSolver:
         """Test successful slider solve."""
         # The visibility check runs only after a drag: handle gone after the first one
         solver._visible_handle = AsyncMock(return_value=False)
-        solver._drag_slider = AsyncMock()
+        solver._drag_slider = AsyncMock(return_value=None)  # not an nc slider
         mock_page.url = 'https://shop.example.com/item?id=1'
         mock_page.context.cookies = AsyncMock(return_value=[
             {'name': 'own', 'value': '1', 'domain': 'shop.example.com', 'path': '/'},
@@ -103,7 +103,7 @@ class TestSliderCaptchaSolver:
         solver._visible_handle = AsyncMock(return_value=True)
         
         # Mock _drag_slider to succeed but slider remains
-        solver._drag_slider = AsyncMock()
+        solver._drag_slider = AsyncMock(return_value=None)  # not an nc slider
         
         with pytest.raises(RuntimeError, match='Slider still present after 3 attempts'):
             await solver.solve({'page_url': 'https://example.com'})
@@ -125,6 +125,9 @@ class TestSliderCaptchaSolver:
         mock_handle.bounding_box = AsyncMock(return_value={
             'x': 100, 'y': 200, 'width': 40, 'height': 40
         })
+        # not inside an nc container: closest() finds nothing
+        mock_handle.evaluate_handle = AsyncMock(
+            return_value=MagicMock(as_element=MagicMock(return_value=None)))
         
         mock_track = MagicMock()
         mock_track.bounding_box = AsyncMock(return_value={
@@ -149,6 +152,8 @@ class TestSliderCaptchaSolver:
         # Mock locate to return elements without bounding boxes
         mock_handle = MagicMock()
         mock_handle.bounding_box = AsyncMock(return_value=None)
+        mock_handle.evaluate_handle = AsyncMock(
+            return_value=MagicMock(as_element=MagicMock(return_value=None)))
         
         mock_track = MagicMock()
         mock_track.bounding_box = AsyncMock(return_value=None)
@@ -201,7 +206,7 @@ class TestSliderCaptchaSolver:
     async def test_custom_selectors(self, solver, mock_page, mock_browser_manager):
         """Test that custom selectors are used when provided."""
         solver._visible_handle = AsyncMock(return_value=False)
-        solver._drag_slider = AsyncMock()
+        solver._drag_slider = AsyncMock(return_value=None)  # not an nc slider
         
         result = await solver.solve({
             'page_url': 'https://example.com',
@@ -256,7 +261,7 @@ class TestSliderCaptchaSolver:
         """The browser opens the URL the guard RETURNS (normalized), bounded by
         the navigation timeout."""
         solver._visible_handle = AsyncMock(return_value=False)
-        solver._drag_slider = AsyncMock()
+        solver._drag_slider = AsyncMock(return_value=None)  # not an nc slider
         with patch('workers.solvers.slider.browser_manager') as mock_bm, \
                 patch('workers.solvers.slider.validate_page_url',
                       return_value='https://normalized.example/') as guard:
@@ -279,7 +284,7 @@ class TestSliderCaptchaSolver:
             loc.nth = MagicMock(return_value=element)
             return loc
         mock_page.locator = MagicMock(side_effect=locator)
-        solver._drag_slider = AsyncMock()
+        solver._drag_slider = AsyncMock(return_value=None)  # not an nc slider
         
         with pytest.raises(RuntimeError, match='Slider still present after 3 attempts'):
             await solver.solve({

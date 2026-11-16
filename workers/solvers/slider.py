@@ -4,7 +4,7 @@ import math
 import random
 from typing import Optional, List, Dict, Any
 from urllib.parse import urlsplit
-from playwright.async_api import Page, Locator
+from playwright.async_api import ElementHandle, Page, Locator
 
 from .base import BaseSolver
 from app.utils.browser import browser_manager
@@ -24,6 +24,28 @@ SETTLE_POLL_MS = 500
 # with TEST_PASS / TEST_BLOCK).
 NC_PASSED = '.nc_scale .btn_ok'
 NC_FAILED = '.nc-container .errloading'
+# nc binds a one-shot mousedown on its wrapper when it shows the failure box;
+# the handler calls reset(), which rebuilds the slider with a fresh handle. A
+# retry therefore clicks the box of the same nc container and waits this long
+# for a visible handle to come back.
+NC_CONTAINER = '.nc-container'
+NC_RETRY_BOX = '.errloading'
+NC_RESET_TIMEOUT_MS = 10000
+NC_RESET_POLL_MS = 250
+# nc answers a full slide after a server round trip; until then the handle
+# waits at the end of the track as btn_slide. Live (demo appkey) the verdict
+# came 1-3 s after the release, i.e. sometimes after the fixed wait in
+# _drag_slider. Judging the attempt before it arrives misses the failure box
+# (and a late pass), so the solver waits for the verdict this long at most.
+NC_VERDICT_TIMEOUT_MS = 6000
+NC_STATE_JS = '''(c) => {
+  if (c.querySelector('.errloading')) return 'failed';
+  if (c.querySelector('.nc_scale .btn_ok')) return 'passed';
+  const h = c.querySelector('.nc_scale .btn_slide');
+  if (!h) return 'gone';
+  return parseFloat(h.style.left || '0') > 0 ? 'pending' : 'idle';
+}'''
+ATTEMPTS = 3
 
 
 class SliderCaptchaSolver(BaseSolver):
@@ -86,10 +108,14 @@ class SliderCaptchaSolver(BaseSolver):
             user_agent = await page.evaluate('navigator.userAgent')
             await page.wait_for_timeout(1000)
             
-            for attempt in range(3):
+            for attempt in range(ATTEMPTS):
+                last = attempt == ATTEMPTS - 1
+                container = None
                 try:
-                    await self._drag_slider(page, handle_selectors, track_selectors)
-                    
+                    container = await self._drag_slider(page, handle_selectors, track_selectors)
+                    if container is not None:
+                        await self._await_nc_verdict(page, container)
+
                     # Success = no VISIBLE handle left except nc handles in
                     # their passed state; an nc failure box is never a success
                     # (see NC_PASSED).
@@ -100,16 +126,28 @@ class SliderCaptchaSolver(BaseSolver):
                     if await self._stays_passed(page, handle_selectors):
                         return await self._result(page, user_agent)
                 except Exception as e:
-                    if attempt == 2:  # Last attempt
+                    if last:
                         raise RuntimeError(f'Slider solve failed: {e}') from e
                     await page.wait_for_timeout(500)
-            
-            raise RuntimeError('Slider still present after 3 attempts')
+                if not last and container is not None:
+                    # outside the try: a reset that brings no handle back is
+                    # the final answer, not one more attempt that cannot drag
+                    await self._retry_nc(page, container, handle_selectors)
+
+            if container is not None and await _visible_in(container, NC_RETRY_BOX):
+                raise RuntimeError(f'Slider rejected by Alibaba nc after {ATTEMPTS} attempts')
+            raise RuntimeError(f'Slider still present after {ATTEMPTS} attempts')
         finally:
             await page.close()
     
-    async def _drag_slider(self, page: Page, handle_selectors: List[str] = None, track_selectors: List[str] = None) -> None:
-        """Drag slider handle with human-like movement."""
+    async def _drag_slider(self, page: Page, handle_selectors: List[str] = None,
+                           track_selectors: List[str] = None) -> Optional[ElementHandle]:
+        """Drag slider handle with human-like movement.
+
+        Returns the Alibaba nc container (.nc-container) the handle sits in,
+        or None for other sliders. It is taken before the drag: a block
+        replaces the handle, the container element itself stays.
+        """
         handle_selectors = handle_selectors or self.SLIDER_HANDLES
         track_selectors = track_selectors or self.SLIDER_TRACKS
         
@@ -117,6 +155,9 @@ class SliderCaptchaSolver(BaseSolver):
         handle = await self._locate(page, handle_selectors, skip=NC_PASSED)
         track = await self._locate(page, track_selectors)
         
+        container = (await handle.evaluate_handle(
+            '(e, s) => e.closest(s)', NC_CONTAINER)).as_element()
+
         knob_box = await handle.bounding_box()
         rail_box = await track.bounding_box()
         
@@ -159,6 +200,41 @@ class SliderCaptchaSolver(BaseSolver):
         
         # Wait for verification
         await page.wait_for_timeout(1500)
+        return container
+
+    async def _await_nc_verdict(self, page: Page, container: ElementHandle) -> None:
+        """Wait while the nc handle still sits slid out without a verdict
+        (see NC_VERDICT_TIMEOUT_MS). Returns early on a pass, a failure box,
+        a handle back at the start (nc did not accept the slide) or when the
+        container is gone; after the timeout the attempt is judged as is."""
+        for _ in range(0, NC_VERDICT_TIMEOUT_MS, NC_RESET_POLL_MS):
+            try:
+                state = await container.evaluate(NC_STATE_JS)
+            except Exception:  # navigated away or detached: judge the page
+                return
+            if state != 'pending':
+                return
+            await page.wait_for_timeout(NC_RESET_POLL_MS)
+
+    async def _retry_nc(self, page: Page, container: ElementHandle, handle_selectors: List[str]) -> None:
+        """After a rejected attempt on an nc slider: click the failure box of
+        the SAME nc container (nc resets on that click) and wait until a
+        visible handle is back in it. Nothing to do when that container shows
+        no failure box. A handle that does not come back raises RuntimeError.
+        """
+        box = await _first_visible(container, NC_RETRY_BOX)
+        if box is None:
+            return
+        await box.click()
+        for _ in range(0, NC_RESET_TIMEOUT_MS, NC_RESET_POLL_MS):
+            await page.wait_for_timeout(NC_RESET_POLL_MS)
+            for selector in handle_selectors:
+                handle = await _first_visible(container, selector, skip=NC_PASSED)
+                if handle is not None:
+                    return
+        raise RuntimeError(
+            'Alibaba nc rejected the slide and its slider did not come back '
+            f'within {NC_RESET_TIMEOUT_MS // 1000} s after clicking the retry box')
     
     async def _locate(self, page: Page, selectors: List[str], skip: Optional[str] = None) -> Locator:
         """First VISIBLE element over the selector list, in selector order.
@@ -226,6 +302,25 @@ class SliderCaptchaSolver(BaseSolver):
             'url': url,
             'user_agent': user_agent,
         }
+
+
+async def _first_visible(root: ElementHandle, selector: str,
+                         skip: Optional[str] = None) -> Optional[ElementHandle]:
+    """First visible element matching selector inside root (not matching skip)."""
+    for element in await root.query_selector_all(selector):
+        if not await element.is_visible():
+            continue
+        if skip and await element.evaluate('(e, s) => e.matches(s)', skip):
+            continue
+        return element
+    return None
+
+
+async def _visible_in(root: ElementHandle, selector: str) -> bool:
+    try:
+        return await _first_visible(root, selector) is not None
+    except Exception:  # the page navigated away: no failure box to report
+        return False
 
 
 def _page_cookies(cookies: List[Dict[str, Any]], page_url: str) -> List[Dict[str, Any]]:
