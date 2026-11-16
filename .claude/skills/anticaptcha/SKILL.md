@@ -359,5 +359,4 @@ curl $BASE_URL/api/v1/stats \
 
 - **GitHub:** https://github.com/stufently/anticaptcha
 - **Документация:** README.md, DOCKER_COMPOSE.md
-- **Настройка qw2:** QWEN_SETUP.md
 - **Сравнение моделей:** MODEL_COMPARISON.md
