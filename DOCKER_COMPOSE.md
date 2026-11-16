@@ -29,14 +29,16 @@ curl http://localhost:8000/health
 # API документация
 open http://localhost:8000/docs
 
-# Решить CAPTCHA
-curl -X POST http://localhost:8000/api/v1/captcha/solve \
+# Создать задачу (API ключ — см. README, «Создание пользователя и API ключа»)
+curl -X POST http://localhost:8000/api/v1/task \
+  -H "Authorization: Bearer ac_xxxx..." \
   -H "Content-Type: application/json" \
   -d '{
-    "captcha_type": "recaptcha_v2",
-    "page_url": "https://example.com",
-    "site_key": "6Le..."
+    "type": "recaptcha_v2",
+    "input_data": {"site_key": "6Le...", "page_url": "https://example.com"}
   }'
+
+# Ответ: {"task_id": 1, "status": "pending"}; результат — GET /api/v1/task/1
 ```
 
 ## Конфигурации
