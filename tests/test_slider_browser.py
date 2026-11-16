@@ -151,7 +151,8 @@ OTHER_NC
      data-nc-lang="SLIDE">请按住滑块，拖动到最右边</span></div>
   </div></div></div></div>
 <script>
-const OUTCOMES = OUTCOMES_LIST, RESET_DELAY = 1500, RESETS = RESETS_ON, VERDICT_DELAY = VERDICT_MS;
+const OUTCOMES = location.pathname === '/next' ? ['pass'] : OUTCOMES_LIST, RESET_DELAY = 1500, RESETS = RESETS_ON, VERDICT_DELAY = VERDICT_MS,
+  NAVIGATE = NAVIGATE_ON && location.pathname !== '/next';
 const wrapper = document.getElementById('nc_1_wrapper');
 const SLIDER_HTML = wrapper.innerHTML;
 window.drags = 0; window.resets = 0; window.wrongClicks = 0;
@@ -182,6 +183,7 @@ function pass() {
     '<span class="nc-lang-cnt" data-nc-lang="SLIDE"><b>验证通过</b></span>';
 }
 function block() {
+  if (NAVIGATE) setTimeout(() => { location.href = '/next'; }, 100);
   wrapper.innerHTML = '<div id="`nc_1_refresh1`" class="errloading"><i id="`nc_1_refresh2`"' +
     ' class="nc_iconfont icon_warn"></i>验证失败，点击框体重试(error:iv6prg)</div>';
   if (!RESETS) return;
@@ -201,14 +203,17 @@ OTHER_BLOCKED_NC = """<div class="nc-container" style="margin:40px;width:300px">
  style="padding:7px 5px">验证失败，点击框体重试(error:other)</div></div></div>"""
 
 
-def nc_retry_page(outcomes, resets=True, other=False, verdict_ms=400):
+def nc_retry_page(outcomes, resets=True, other=False, verdict_ms=400, navigate=False):
+    """navigate: on a block the page goes to /next, a new document whose nc
+    passes on the first drag."""
     return (NC_RETRY_PAGE.replace('OUTCOMES_LIST', repr(list(outcomes)))
+            .replace('NAVIGATE_ON', 'true' if navigate else 'false')
             .replace('VERDICT_MS', str(verdict_ms))
             .replace('RESETS_ON', 'true' if resets else 'false')
             .replace('OTHER_NC', OTHER_BLOCKED_NC if other else ''))
 
 
-def run_page(monkeypatch, html, *, after_page=None):
+def run_page(monkeypatch, html, *, after_page=None, extra_input=None):
     """Solve PAGE_URL served as `html`; returns (result or exception, info)."""
     info = {}
 
@@ -264,7 +269,7 @@ def run_page(monkeypatch, html, *, after_page=None):
         monkeypatch.setattr(manager, 'new_page', routed_page)
         solver = slider.SliderCaptchaSolver()
         try:
-            return await solver.solve({'page_url': PAGE_URL})
+            return await solver.solve({'page_url': PAGE_URL, **(extra_input or {})})
         except Exception as exc:  # returned for the assertions
             return exc
         finally:
@@ -363,6 +368,30 @@ def test_real_nc_block_retry_box_click_brings_slider_back_and_passes(monkeypatch
     assert (info['drags'], info['resets']) == (2, 1)
     assert info['final_dom'] == {'handle_in_dom': True, 'handle_visible': True,
                                  'track_visible': True}
+
+
+def test_real_nc_retry_with_a_custom_handle_selector(monkeypatch):
+    """A custom selector that names the nc container itself still finds the
+    handle nc rebuilt after the reset (resolved on the page, not inside it)."""
+    monkeypatch.setattr(slider, 'NC_RESET_TIMEOUT_MS', 4000)
+    result, info = run_page(monkeypatch, nc_retry_page(['block', 'pass']),
+                            extra_input={'handle_selector': '#nc #nc_1_n1z'})
+
+    assert not isinstance(result, Exception), result
+    assert (info['drags'], info['resets']) == (2, 1)
+
+
+def test_real_nc_block_then_navigation_moves_on_to_the_new_document(monkeypatch):
+    """The page leaves for a new document right after the block: the old nc
+    container is gone, so the retry has nothing to click and the next attempt
+    solves the slider of the new document."""
+    monkeypatch.setattr(slider, 'NC_RESET_TIMEOUT_MS', 4000)
+    result, info = run_page(monkeypatch, nc_retry_page(['block'], navigate=True))
+
+    assert not isinstance(result, Exception), result
+    assert result['url'] == ORIGIN + '/next'
+    # counters of the new document: one drag, no reset
+    assert (info['drags'], info['resets']) == (1, 0)
 
 
 def test_real_nc_late_verdict_is_awaited_before_the_retry(monkeypatch):

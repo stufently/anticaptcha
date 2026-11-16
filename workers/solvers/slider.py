@@ -4,7 +4,7 @@ import math
 import random
 from typing import Optional, List, Dict, Any
 from urllib.parse import urlsplit
-from playwright.async_api import ElementHandle, Page, Locator
+from playwright.async_api import Error as PlaywrightError, ElementHandle, Page, Locator
 
 from .base import BaseSolver
 from app.utils.browser import browser_manager
@@ -220,22 +220,42 @@ class SliderCaptchaSolver(BaseSolver):
         """After a rejected attempt on an nc slider: click the failure box of
         the SAME nc container (nc resets on that click) and wait until a
         visible handle is back in it. Nothing to do when that container shows
-        no failure box. A handle that does not come back raises RuntimeError.
+        no failure box, or is gone (the page navigated: the next attempt looks
+        at the new document). A handle that does not come back raises
+        RuntimeError.
         """
-        box = await _first_visible(container, NC_RETRY_BOX)
-        if box is None:
-            return
-        await box.click()
-        for _ in range(0, NC_RESET_TIMEOUT_MS, NC_RESET_POLL_MS):
-            await page.wait_for_timeout(NC_RESET_POLL_MS)
-            for selector in handle_selectors:
-                handle = await _first_visible(container, selector, skip=NC_PASSED)
-                if handle is not None:
+        try:
+            box = await _first_visible(container, NC_RETRY_BOX)
+            if box is None:
+                return
+            await box.click()
+            for _ in range(0, NC_RESET_TIMEOUT_MS, NC_RESET_POLL_MS):
+                await page.wait_for_timeout(NC_RESET_POLL_MS)
+                if await self._handle_in(page, container, handle_selectors):
                     return
+        except PlaywrightError:
+            return
         raise RuntimeError(
             'Alibaba nc rejected the slide and its slider did not come back '
             f'within {NC_RESET_TIMEOUT_MS // 1000} s after clicking the retry box')
-    
+
+    async def _handle_in(self, page: Page, container: ElementHandle, selectors: List[str]) -> bool:
+        """True if a handle selector matches a visible element inside container
+        that is not an nc handle in its passed state. Selectors are resolved on
+        the page, like for the drag (a custom "#nc #nc_1_n1z" must keep its
+        meaning), and only then checked for being inside the container."""
+        for selector in selectors:
+            locator = page.locator(selector)
+            for i in range(await locator.count()):
+                element = locator.nth(i)
+                if not await element.is_visible():
+                    continue
+                if await element.evaluate(
+                        '(e, a) => a.container.contains(e) && !e.matches(a.skip)',
+                        {'container': container, 'skip': NC_PASSED}):
+                    return True
+        return False
+
     async def _locate(self, page: Page, selectors: List[str], skip: Optional[str] = None) -> Locator:
         """First VISIBLE element over the selector list, in selector order.
 
@@ -304,15 +324,11 @@ class SliderCaptchaSolver(BaseSolver):
         }
 
 
-async def _first_visible(root: ElementHandle, selector: str,
-                         skip: Optional[str] = None) -> Optional[ElementHandle]:
-    """First visible element matching selector inside root (not matching skip)."""
+async def _first_visible(root: ElementHandle, selector: str) -> Optional[ElementHandle]:
+    """First visible element matching selector inside root."""
     for element in await root.query_selector_all(selector):
-        if not await element.is_visible():
-            continue
-        if skip and await element.evaluate('(e, s) => e.matches(s)', skip):
-            continue
-        return element
+        if await element.is_visible():
+            return element
     return None
 
 
