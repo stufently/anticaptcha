@@ -192,9 +192,18 @@ curl -X POST http://localhost:8000/api/v1/task \
 «пройдено» (`.nc_scale .btn_ok`: nc оставляет ручку видимой и только меняет ей
 класс `btn_slide` → `btn_ok`, текст «验证通过»; такую ручку воркер и не тянет
 повторно), и так остаётся 3 секунды (ручка,
-которая вернулась после проверки виджетом, — неудача попытки). Окно отказа nc
-(`.nc-container .errloading`, «验证失败，点击框体重试») успехом не считается, хотя
-ручки в нём нет. Треки в этой проверке не участвуют.
+которая вернулась после проверки виджетом, — неудача попытки). Треки в этой
+проверке не участвуют. После перетаскивания ручки Alibaba nc воркер ждёт ответа
+nc (до 6 с, пока ручка стоит в конце трека без вердикта): ответ сервера nc
+приходит через 1–3 с после отпускания.
+
+Окно отказа nc (`.nc-container .errloading`, «验证失败，点击框体重试») успехом не
+считается, хотя ручки в нём нет. Если попытки остались, воркер кликает по окну
+отказа того же контейнера nc (nc на этот клик вызывает `reset()` и заново
+строит слайдер), ждёт видимую ручку до 10 с и делает следующую попытку; ручка
+не вернулась — задача `failed` с ошибкой «Alibaba nc rejected the slide and its
+slider did not come back…». Отказ на последней (третьей) попытке — `failed`
+«Slider rejected by Alibaba nc after 3 attempts».
 
 Результат `slider` нужен, чтобы продолжить сессию, которую открыл воркер:
 
@@ -346,6 +355,22 @@ cp .env.example .env
 - `ANTICAPTCHA_DATABASE_PATH` — путь к базе данных
 - `ANTICAPTCHA_HEADLESS` — headless режим браузера
 - `ANTICAPTCHA_BROWSER_TIMEOUT` — таймаут браузера (секунды)
+- `ANTICAPTCHA_BROWSER_LOCALE` — язык браузера (по умолчанию `en-US`, тег вида
+  `en-US`, `de-DE`, `ru`): `navigator.language` = `en-US`,
+  `navigator.languages` = `["en-US", "en"]`, HTTP `Accept-Language` =
+  `en-US,en;q=0.9`, как у Chrome с этим языком. Без него headless Chromium не
+  шлёт `Accept-Language` вовсе.
+
+Каждая страница браузера воркера отдаёт одинаковую идентичность в HTTP и в JS:
+`User-Agent`, client hints (`Sec-CH-UA*`) и `Accept-Language` совпадают с
+`navigator.userAgent`, `navigator.userAgentData` и `navigator.languages` (без
+`HeadlessChrome`), во всех iframe (изоляция сайтов выключена, отдельных
+процессов у фреймов нет) и во всплывающих окнах (`window.open`). Остаток:
+первую загрузку всплывающего окна Chromium начинает раньше, чем воркер узнаёт
+об окне, поэтому документ окна и его первые подресурсы уходят с верным
+`User-Agent`, но с client hints самого Chromium (`"HeadlessChrome"` в
+`Sec-CH-UA`) и `Accept-Language` без `,en;q=0.9`; stealth-скрипты в окна не
+попадают.
 
 ## ML Модели
 

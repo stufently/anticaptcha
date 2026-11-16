@@ -21,6 +21,11 @@
 ### Browser (Playwright)
 - **Timeout:** 30 seconds default
 - **Headless mode:** Yes (no GUI)
+- **Identity:** User-Agent, client hints and Accept-Language of every page
+  match navigator.* (no `HeadlessChrome`); locale `ANTICAPTCHA_BROWSER_LOCALE`
+  (default `en-US` → `Accept-Language: en-US,en;q=0.9`). Popups get the same
+  identity once the worker sees them; their first load still carries
+  Chromium's own client hints (see `_follow_popups` in `app/utils/browser.py`).
 - **Browser:** Chromium 158.0.8127.18 (Chrome for Testing), Playwright 1.65.0
 - **Browser sandbox:** OFF — `--no-sandbox`, `--disable-setuid-sandbox` and
   `--no-zygote` in `app/utils/browser.py`. Forced by the runtime environment,

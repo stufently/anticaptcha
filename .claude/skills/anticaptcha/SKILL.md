@@ -213,6 +213,10 @@ Swagger UI — `/docs`, ReDoc — `/redoc`.
 
 `slider`: `page_url` (обязательно, тот же SSRF-guard), опционально
 `handle_selector` и `track_selector` (строка или список строк CSS-селекторов).
+Отказ Alibaba nc («验证失败，点击框体重试») воркер снимает кликом по окну отказа и
+пробует снова (всего 3 попытки); `user_agent` результата совпадает с HTTP
+`User-Agent` страницы, `Accept-Language` — с `navigator.languages`
+(`ANTICAPTCHA_BROWSER_LOCALE`, по умолчанию `en-US`).
 
 `image_text`: `image` — картинка в base64 (без префикса `data:`), форматы PNG,
 JPEG, WEBP, BMP; не больше `ANTICAPTCHA_MAX_IMAGE_PIXELS` (4 000 000) пикселей и
