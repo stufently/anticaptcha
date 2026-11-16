@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     # Browser
     headless: bool = True
     browser_timeout: int = 30  # seconds
+    # Locale of every browser page: navigator.language(s) and the HTTP
+    # Accept-Language header (headless Chromium sends none on its own).
+    # "en-US" -> Accept-Language "en-US,en;q=0.9", navigator.languages
+    # ["en-US", "en"], as a desktop Chrome with that UI language does.
+    browser_locale: str = Field("en-US", pattern=r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$")
 
     # Logging
     log_level: str = "INFO"

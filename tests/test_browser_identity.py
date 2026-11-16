@@ -14,7 +14,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from app.utils.browser import BrowserManager, _build_identity
+from pydantic import ValidationError
+
+from app.config import Settings, settings
+from app.utils.browser import BrowserManager, _build_identity, _languages
 
 CLIENT_HINTS = ('sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform')
 
@@ -22,7 +25,8 @@ NAVIGATOR_JS = """async () => {
   const d = navigator.userAgentData;
   return {ua: navigator.userAgent,
           brands: d ? d.brands.map(b => ({brand: b.brand, version: b.version})) : null,
-          mobile: d ? d.mobile : null, platform: d ? d.platform : null};
+          mobile: d ? d.mobile : null, platform: d ? d.platform : null,
+          languages: Array.from(navigator.languages), language: navigator.language};
 }"""
 
 
@@ -70,6 +74,12 @@ class EchoServer:
     def __exit__(self, *exc):
         self._server.shutdown()
         self._server.server_close()
+
+
+def header_languages(value):
+    """Accept-Language "en-US,en;q=0.9" -> ["en-US", "en"] (q-values dropped,
+    Chromium lists them in navigator.languages order)."""
+    return [part.split(';')[0].strip() for part in value.split(',')]
 
 
 def sec_ch_ua(brands):
@@ -127,6 +137,51 @@ def test_http_headers_match_navigator_without_headless(kwargs):
             assert headers['sec-ch-ua-platform'] == f'"{nav["platform"]}"', (path, headers)
             assert headers['sec-ch-ua-mobile'] == ('?1' if nav['mobile'] else '?0'), (path, headers)
             assert not any('headless' in v.lower() for v in headers.values()), (path, headers)
+            # headless Chromium sends no Accept-Language unless told to
+            assert 'accept-language' in headers, (path, headers)
+            assert header_languages(headers['accept-language']) == nav['languages'], (path, headers)
+    # default browser_locale, as desktop Chrome with an en-US UI says it
+    assert nav['languages'] == ['en-US', 'en'] and nav['language'] == 'en-US'
+    assert requests['/'][0]['accept-language'] == 'en-US,en;q=0.9'
+
+
+@pytest.mark.parametrize('kwargs', [{}, {'stealth': False}, {'proxy': DEAD_PROXY}],
+                         ids=['plain', 'no-stealth', 'proxy-context'])
+def test_browser_locale_setting_drives_accept_language_and_navigator(monkeypatch, kwargs):
+    monkeypatch.setattr(settings, 'browser_locale', 'de-DE')
+
+    async def scenario(echo):
+        manager = BrowserManager()
+        try:
+            page = await manager.new_page(**kwargs)
+            await page.goto(echo.base + '/')
+            await page.evaluate('window.fetched')
+            nav = await page.evaluate(NAVIGATOR_JS)
+            await manager.close_page(page)
+            return nav
+        finally:
+            await manager.close()
+
+    with EchoServer() as echo:
+        nav = asyncio.run(scenario(echo))
+        requests = dict(echo.requests)
+
+    assert nav['languages'] == ['de-DE', 'de'] and nav['language'] == 'de-DE'
+    for path, seen in requests.items():
+        for headers in seen:
+            assert headers.get('accept-language') == 'de-DE,de;q=0.9', (path, headers)
+
+
+def test_languages_of_a_locale():
+    assert _languages('en-US') == ('en-US', 'en')
+    assert _languages('pt-BR') == ('pt-BR', 'pt')
+    assert _languages('ru') == ('ru',)
+
+
+@pytest.mark.parametrize('value', ['', 'en_US', 'en-US,en', 'en-US;q=1', 'e', 'english'])
+def test_browser_locale_rejects_what_is_not_a_language_tag(value):
+    with pytest.raises(ValidationError):
+        Settings(browser_locale=value)
 
 
 async def _popup_settled(manager):
@@ -141,9 +196,9 @@ async def _popup_settled(manager):
 @pytest.mark.parametrize('proxy', [None, DEAD_PROXY], ids=['plain', 'proxy-context'])
 def test_popup_gets_the_identity_of_its_opener(proxy):
     """Popups bypass new_page(): the context's 'page' hook gives them the same
-    UA and client hints. Requests after the hook carry them;
+    UA, client hints and Accept-Language. Requests after the hook carry them;
     the popup's first load can go out before it (see _follow_popups), so only
-    its User-Agent is checked there."""
+    the User-Agent and the first Accept-Language entry are checked there."""
     async def scenario(echo):
         manager = BrowserManager()
         try:
@@ -169,10 +224,12 @@ def test_popup_gets_the_identity_of_its_opener(proxy):
 
     assert first['user-agent'] == opener['ua']
     assert 'Headless' not in first['user-agent']
+    assert header_languages(first['accept-language'])[0] == opener['language']
     assert in_popup == opener
     assert later['user-agent'] == in_popup['ua']
     assert later['sec-ch-ua'] == sec_ch_ua(in_popup['brands'])
     assert later['sec-ch-ua-platform'] == f'"{in_popup["platform"]}"'
+    assert header_languages(later['accept-language']) == in_popup['languages']
     assert not any('headless' in v.lower() for v in later.values()), later
 
 

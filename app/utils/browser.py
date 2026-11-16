@@ -33,6 +33,20 @@ class BrowserIdentity:
     metadata: dict
 
 
+def _languages(locale: str) -> tuple:
+    """navigator.languages for a locale: the locale and, for a regional one,
+    its base language ("en-US" -> ("en-US", "en")). Chromium turns the same
+    list into Accept-Language "en-US,en;q=0.9"."""
+    base = locale.split('-', 1)[0]
+    return (locale, base) if base.lower() != locale.lower() else (locale,)
+
+
+def _accept_language(languages: tuple) -> str:
+    """Accept-Language of desktop Chrome for that list: "en-US,en;q=0.9"."""
+    return ','.join([languages[0]] + [f'{lang};q={0.9 - 0.1 * i:.1f}'
+                                      for i, lang in enumerate(languages[1:])])
+
+
 def _unheadless_brands(brands) -> list:
     return [
         {'brand': 'Google Chrome' if b['brand'] == 'HeadlessChrome' else b['brand'],
@@ -79,7 +93,9 @@ class BrowserManager:
         self._identity = None
         # applies the identity to popups (window.open) of our pages
         self._popup_tasks = set()
-        self._stealth = Stealth(navigator_platform_override="Linux x86_64", webgl_vendor_override="Google Inc. (Intel)", webgl_renderer_override="ANGLE (Intel, Mesa Intel(R) UHD Graphics 620 (KBL GT2), OpenGL 4.6)") if HAS_STEALTH else None
+        self._languages = _languages(settings.browser_locale)
+        # stealth's navigator.languages patch must say what Accept-Language says
+        self._stealth = Stealth(navigator_platform_override="Linux x86_64", webgl_vendor_override="Google Inc. (Intel)", webgl_renderer_override="ANGLE (Intel, Mesa Intel(R) UHD Graphics 620 (KBL GT2), OpenGL 4.6)", navigator_languages_override=self._languages) if HAS_STEALTH else None
         self._lock = asyncio.Lock()
 
     async def get_browser(self) -> Browser:
@@ -172,8 +188,9 @@ class BrowserManager:
         Every page gets its own context (closed together with the page by
         close_page) and the browser identity: the HTTP User-Agent, the client
         hints and navigator.userAgent/userAgentData all say Chrome, never
-        HeadlessChrome, whatever ``stealth`` is. Popups the page opens get the
-        same identity, see _follow_popups.
+        HeadlessChrome, and Accept-Language matches navigator.languages
+        (settings.browser_locale), whatever ``stealth`` is. Popups the page
+        opens get the same identity, see _follow_popups.
 
         Args:
             stealth: Whether to apply stealth patches (default: True)
@@ -186,7 +203,7 @@ class BrowserManager:
         identity = await self._browser_identity(browser)
         if proxy is not None:
             creation = asyncio.create_task(
-                browser.new_context(proxy=proxy, user_agent=identity.user_agent))
+                browser.new_context(proxy=proxy, **self._context_options(identity)))
             try:
                 context = await asyncio.shield(creation)
             except asyncio.CancelledError:
@@ -205,7 +222,7 @@ class BrowserManager:
         else:
             # Browser.new_page makes a context owned by the page: page.close()
             # closes it, so cookies never leak between tasks.
-            page = await browser.new_page(user_agent=identity.user_agent)
+            page = await browser.new_page(**self._context_options(identity))
 
         try:
             self._follow_popups(page.context, identity)
@@ -218,15 +235,29 @@ class BrowserManager:
 
         return page
 
+    def _context_options(self, identity: BrowserIdentity) -> dict:
+        """Context-level part of the identity. Playwright applies it to a page
+        of the context before the page runs; a popup's first load can still
+        go out without the extra header, see _follow_popups."""
+        return {
+            'user_agent': identity.user_agent,
+            'locale': self._languages[0],
+            'extra_http_headers': {'Accept-Language': _accept_language(self._languages)},
+        }
+
     async def _apply_identity(self, page: Page, identity: BrowserIdentity) -> None:
-        """Override UA and client hints of this page's frames over CDP.
+        """Override UA, client hints and Accept-Language of this page over CDP.
 
         The context's user_agent alone is not enough: Playwright then sends
         client-hint metadata without brands, and Chromium fills in its own list,
         so Sec-CH-UA and navigator.userAgentData still say HeadlessChrome. With
         the brands given here both the headers and navigator.userAgentData
-        report the same list. The CDP session must stay attached: Chromium drops
-        a session's overrides when it detaches; it ends with the page.
+        report the same list. acceptLanguage makes navigator.languages the
+        full list ("en-US", "en"); the context's locale alone yields only
+        "en-US", and requests the renderer starts itself (images, fetch) keep
+        that value, hence the Accept-Language extra header of the context
+        (_context_options). The CDP session must stay attached: Chromium drops a
+        session's overrides when it detaches; it ends with the page.
         Same-process frames inherit it: all iframes, cross-site ones too, since
         site isolation is off (no separate iframe targets exist, checked with
         Target.getTargets), and dedicated workers.
@@ -235,6 +266,7 @@ class BrowserManager:
         await session.send('Emulation.setUserAgentOverride', {
             'userAgent': identity.user_agent,
             'userAgentMetadata': identity.metadata,
+            'acceptLanguage': ','.join(self._languages),
         })
 
     def _follow_popups(self, context: BrowserContext, identity: BrowserIdentity) -> None:
@@ -245,7 +277,9 @@ class BrowserManager:
         the override lands while its first load is already running. Measured
         with a local echo server: the popup's document, its subresources and
         an early fetch went out with the right User-Agent, but with Chromium's
-        own client hints (Sec-CH-UA brand "HeadlessChrome"). Requests after the hook and
+        own client hints (Sec-CH-UA brand "HeadlessChrome") and Accept-Language
+        "en-US" (the bare locale, without ",en;q=0.9"); not even the context's
+        extra headers reach that first navigation. Requests after the hook and
         navigator.* of the popup match the opener. Rewriting the early headers
         would take context-wide request routing (every request of every page
         through the driver, HTTP cache off), so it is not done. Stealth scripts
