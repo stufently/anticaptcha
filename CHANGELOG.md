@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.3.5] — 2026-11-16
+
 ### Fixed — 2026-11-16
 - Браузер: HTTP-заголовок `User-Agent` и client hints (`Sec-CH-UA`,
   `Sec-CH-UA-Platform`, `Sec-CH-UA-Mobile`) больше не говорят `HeadlessChrome` и
