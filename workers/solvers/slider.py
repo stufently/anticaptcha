@@ -90,8 +90,9 @@ class SliderCaptchaSolver(BaseSolver):
                 try:
                     await self._drag_slider(page, handle_selectors, track_selectors)
                     
-                    # Success = no VISIBLE handle left, or the nc pass marker;
-                    # an nc failure box is never a success (see NC_PASSED).
+                    # Success = no VISIBLE handle left except nc handles in
+                    # their passed state; an nc failure box is never a success
+                    # (see NC_PASSED).
                     # Tracks are not checked: Alibaba nc keeps its track
                     # (.nc_scale, #nc_1__scale_text) after a pass. Same handle
                     # selectors as the drag: custom ones are invisible to the
@@ -112,7 +113,8 @@ class SliderCaptchaSolver(BaseSolver):
         handle_selectors = handle_selectors or self.SLIDER_HANDLES
         track_selectors = track_selectors or self.SLIDER_TRACKS
         
-        handle = await self._locate(page, handle_selectors)
+        # an nc handle that already passed is not something to drag
+        handle = await self._locate(page, handle_selectors, skip=NC_PASSED)
         track = await self._locate(page, track_selectors)
         
         knob_box = await handle.bounding_box()
@@ -158,35 +160,40 @@ class SliderCaptchaSolver(BaseSolver):
         # Wait for verification
         await page.wait_for_timeout(1500)
     
-    async def _locate(self, page: Page, selectors: List[str]) -> Locator:
+    async def _locate(self, page: Page, selectors: List[str], skip: Optional[str] = None) -> Locator:
         """First VISIBLE element over the selector list, in selector order.
 
         A selector may match several elements ([role="slider"], a hidden
         template copy before the live widget): each match is checked with
         is_visible(), and a single element (nth) avoids the strict-mode error
-        bounding_box() raises on a multi-element locator.
+        bounding_box() raises on a multi-element locator. Elements matching
+        `skip` (CSS) do not count.
         """
         for selector in selectors:
             locator = page.locator(selector)
             for i in range(await locator.count()):
                 element = locator.nth(i)
-                if await element.is_visible():
-                    return element
+                if not await element.is_visible():
+                    continue
+                if skip and await element.evaluate('(e, s) => e.matches(s)', skip):
+                    continue
+                return element
         raise LookupError(f'No visible element found for selectors: {selectors}')
 
     async def _visible_handle(self, page: Page, selectors: List[str]) -> bool:
-        """True while any handle selector still matches a visible element."""
+        """True while any handle selector still matches a visible element
+        that is not an nc handle in its passed state."""
         try:
-            await self._locate(page, selectors)
+            await self._locate(page, selectors, skip=NC_PASSED)
         except LookupError:
             return False
         return True
 
     async def _passed(self, page: Page, selectors: List[str]) -> bool:
-        """One look at the page: nc says passed, or no handle is visible and
-        nc does not show its failure box."""
-        if await self._visible(page, NC_PASSED):
-            return True
+        """One look at the page: no nc failure box, and every visible handle
+        is gone or an nc handle in its passed state. The pass marker counts
+        only on the handle itself, so a passed nc never masks another slider
+        that is still there."""
         if await self._visible(page, NC_FAILED):
             return False
         return not await self._visible_handle(page, selectors)

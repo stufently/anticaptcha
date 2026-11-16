@@ -275,6 +275,7 @@ class TestSliderCaptchaSolver:
             loc.count = AsyncMock(return_value=1 if selector == '#custom-handle' else 0)
             element = MagicMock()
             element.is_visible = AsyncMock(return_value=True)
+            element.evaluate = AsyncMock(return_value=False)  # not a passed nc handle
             loc.nth = MagicMock(return_value=element)
             return loc
         mock_page.locator = MagicMock(side_effect=locator)

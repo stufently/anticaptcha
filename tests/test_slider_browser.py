@@ -122,6 +122,17 @@ NC_REAL_PASS_PAGE = NC_REAL_PAGE.replace('OUTCOME_FN', 'pass')
 NC_REAL_BLOCK_PAGE = NC_REAL_PAGE.replace('OUTCOME_FN', 'block')
 
 
+# (g) A passed nc next to a slider that never accepts: the pass marker belongs
+# to the nc handle only and must not turn the stuck slider into a success.
+PASSED_NC_BLOCK = """<div class="nc-container"><div id="nc_1_n1t" class="nc_scale"
+ style="position:relative;width:300px;height:34px"><span id="nc_1_n1z" class="nc_iconfont btn_ok"
+ style="position:absolute;left:258px;width:40px;height:34px;background:#fff"></span></div></div>"""
+STUCK_WITH_PASSED_NC_PAGE = STUCK_PAGE.replace('<body>', '<body>' + PASSED_NC_BLOCK, 1)
+# (h) The same passed nc next to a second nc that was blocked.
+BLOCKED_WITH_PASSED_NC_PAGE = NC_REAL_BLOCK_PAGE.replace(
+    '<body>', '<body>' + PASSED_NC_BLOCK.replace('nc_1_', 'nc_2_'), 1)
+
+
 def run_page(monkeypatch, html, *, after_page=None):
     """Solve PAGE_URL served as `html`; returns (result or exception, info)."""
     info = {}
@@ -262,3 +273,19 @@ def test_real_nc_block_without_handle_is_failed(monkeypatch):
     assert info['drags'] == 1
     assert 'No visible element found' in str(result)
     assert info['final_dom']['handle_in_dom'] is False
+
+
+def test_passed_nc_does_not_mask_a_stuck_slider(monkeypatch):
+    result, info = run_page(monkeypatch, STUCK_WITH_PASSED_NC_PAGE)
+
+    assert isinstance(result, RuntimeError)
+    assert str(result) == 'Slider still present after 3 attempts'
+    # every attempt dragged the live slider, not the already passed nc handle
+    assert info['drags'] == 3
+
+
+def test_passed_nc_does_not_mask_a_blocked_nc(monkeypatch):
+    result, info = run_page(monkeypatch, BLOCKED_WITH_PASSED_NC_PAGE)
+
+    assert isinstance(result, RuntimeError)
+    assert info['drags'] == 1
