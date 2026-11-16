@@ -29,7 +29,8 @@ navigation, fetch/XHR, frames, forms or WebSockets can still reach private
 addresses. And the name is resolved here and again by the browser, so DNS
 rebinding (a name that answers with a public address now and a private one a
 moment later) is not closed either. Egress from the worker must therefore be
-restricted at the network level (e.g. a Kubernetes NetworkPolicy).
+restricted at the network level (e.g. a Kubernetes NetworkPolicy; the Helm
+chart creates one with networkPolicy.enabled=true).
 """
 import ipaddress
 import re

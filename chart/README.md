@@ -69,12 +69,10 @@ kubectl apply -f argocd-application.yaml
 контролирует атакующий, поэтому админ-токен (credential только для API) в его
 окружение не попадает.
 
-Чарт не создаёт NetworkPolicy. SSRF-guard воркера проверяет только `page_url`
-задачи. Страница, загруженная в режиме `page`, может редиректом, скриптом или
-WebSocket обратиться к внутренним адресам, а DNS-rebinding guard тоже не
-закрывает. Поэтому в кластере ограничьте egress подов воркера: DNS и публичный
-интернет, без подсетей подов и Service'ов, частных сетей, link-local
-(169.254.0.0/16, metadata) и адресов самих нод.
+SSRF-guard воркера проверяет только `page_url` задачи. Страница, загруженная в
+режиме `page`, может редиректом, скриптом или WebSocket обратиться к внутренним
+адресам, а DNS-rebinding guard тоже не закрывает. Эту границу держит egress
+NetworkPolicy воркера — см. раздел [NetworkPolicy воркера](#networkpolicy-воркера).
 
 Если `worker.existingSecret` пуст, воркер подключает общий Secret
 (`existingSecret`) целиком через `envFrom`. Ключ `ANTICAPTCHA_ADMIN_TOKEN` из него
@@ -116,6 +114,71 @@ worker:
     enabled: true
     maxAgeSeconds: 300
     periodSeconds: 30
+```
+
+### NetworkPolicy воркера
+
+`networkPolicy.enabled: true` создаёт NetworkPolicy
+`<release>-anticaptcha-worker-egress` на поды воркера (`policyTypes: [Egress]`).
+Включать рекомендуется, если CNI кластера применяет NetworkPolicy (у k3s это
+встроенный kube-router; Calico и Cilium тоже). Без такого CNI объект создастся,
+но ничего не ограничит. По умолчанию политика выключена, чтобы обновление чарта
+не меняло сетевое поведение существующих установок.
+
+Политика разрешает воркеру только:
+
+- DNS (UDP/TCP 53) к подам `k8s-app: kube-dns` в namespace `kube-system`
+  (`networkPolicy.dns`; при NodeLocal DNSCache или другом DNS поправь селекторы
+  или добавь правило в `extraEgress`);
+- IPv4 `0.0.0.0/0` кроме частных, shared (100.64.0.0/10), loopback, link-local
+  (169.254.0.0/16, в том числе metadata облака 169.254.169.254),
+  документационных, multicast и зарезервированных диапазонов;
+- IPv6 `::/0` кроме loopback, unique local (fc00::/7), link-local (fe80::/10),
+  IPv4-mapped, NAT64, 6to4/Teredo, документационных и multicast — только при
+  `networkPolicy.ipv6.enabled: true`. Без этого IPv6-egress запрещён целиком, что
+  строже; включай в dual-stack кластерах.
+
+Внутри кластера воркеру ничего не нужно: с API он общается через SQLite на общем
+томе, LLM-эндпоинт публичный. Прокси задач и LLM внутри кластера — через
+`extraEgress`.
+
+Ограничения. Публичные адреса нод и Kubernetes API в частные диапазоны не
+попадают — их добавь в `ipv4.extraExcept`/`ipv6.extraExcept` (CIDR своего
+семейства, иначе шаблон завершится ошибкой). Но трафик пода к **своей** ноде
+многие CNI пропускают независимо от политики (так допускает спецификация
+NetworkPolicy), поэтому сервисы на `hostNetwork`/`hostPort` ноды воркера
+`except` может не закрыть: не держи на нодах открытых без аутентификации
+сервисов или выноси воркер на отдельные ноды.
+
+| Параметр | Описание | По умолчанию |
+|----------|----------|--------------|
+| `networkPolicy.enabled` | Создать egress NetworkPolicy воркера | `false` |
+| `networkPolicy.dns.namespaceSelector` | Namespace кластерного DNS | `matchLabels: {kubernetes.io/metadata.name: kube-system}` |
+| `networkPolicy.dns.podSelector` | Поды кластерного DNS | `matchLabels: {k8s-app: kube-dns}` |
+| `networkPolicy.dns.ports` | Порты DNS | UDP 53, TCP 53 |
+| `networkPolicy.ipv4.cidr` | Разрешённый IPv4-диапазон | `0.0.0.0/0` |
+| `networkPolicy.ipv4.except` | Исключения из него (замена списка целиком) | частные и спец-диапазоны, см. `values.yaml` |
+| `networkPolicy.ipv4.extraExcept` | Дополнительные IPv4-исключения (добавляются к `except`) | `[]` |
+| `networkPolicy.ipv6.enabled` | Разрешить публичный IPv6 | `false` |
+| `networkPolicy.ipv6.cidr` | Разрешённый IPv6-диапазон | `::/0` |
+| `networkPolicy.ipv6.except` | Исключения из него | loopback, ULA, link-local и др., см. `values.yaml` |
+| `networkPolicy.ipv6.extraExcept` | Дополнительные IPv6-исключения | `[]` |
+| `networkPolicy.extraEgress` | Дополнительные egress-правила, добавляются как есть | `[]` |
+
+```yaml
+networkPolicy:
+  enabled: true
+  ipv4:
+    extraExcept:
+      - 198.51.100.7/32   # публичный адрес ноды / API-сервера
+  extraEgress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: egress-proxy
+      ports:
+        - protocol: TCP
+          port: 3128
 ```
 
 ### Persistence

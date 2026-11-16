@@ -92,6 +92,74 @@ worker:
       cpu: 500m
       memory: 1536Mi
 
+# Egress NetworkPolicy for the worker pods. The worker opens client-supplied
+# pages in Chromium; the SSRF guard checks only the task page_url, so redirects,
+# script navigation, fetch/frames/WebSocket of a loaded page can still reach
+# internal addresses. With enabled=true the worker may only resolve DNS and
+# talk to public addresses. Needs a CNI that enforces NetworkPolicy.
+# The worker needs nothing inside the cluster: it shares the SQLite database
+# with the API through the data volume, and the LLM endpoint is public.
+networkPolicy:
+  enabled: false
+  dns:
+    # Where cluster DNS lives. Both selectors are ANDed in one peer.
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: kube-system
+    podSelector:
+      matchLabels:
+        k8s-app: kube-dns
+    ports:
+      - protocol: UDP
+        port: 53
+      - protocol: TCP
+        port: 53
+  ipv4:
+    cidr: 0.0.0.0/0
+    # Private, shared, loopback, link-local (cloud metadata 169.254.169.254),
+    # documentation, benchmarking, multicast and reserved ranges.
+    except:
+      - 0.0.0.0/8
+      - 10.0.0.0/8
+      - 100.64.0.0/10
+      - 127.0.0.0/8
+      - 169.254.0.0/16
+      - 172.16.0.0/12
+      - 192.0.0.0/24
+      - 192.0.2.0/24
+      - 192.168.0.0/16
+      - 198.18.0.0/15
+      - 198.51.100.0/24
+      - 203.0.113.0/24
+      - 224.0.0.0/4
+      - 240.0.0.0/4
+    # Appended to except: IPv4 CIDRs only, e.g. public addresses of the nodes
+    # or of the Kubernetes API that are not covered by the private ranges.
+    extraExcept: []
+  ipv6:
+    # Off by default: without this rule the policy allows no IPv6 egress at
+    # all, which is stricter. Turn it on in dual-stack clusters.
+    enabled: false
+    cidr: "::/0"
+    except:
+      - "::/128"
+      - "::1/128"
+      - "::ffff:0:0/96"
+      - 64:ff9b::/96
+      - 64:ff9b:1::/48
+      - 100::/64
+      - 2001::/23
+      - 2001:db8::/32
+      - 2002::/16
+      - fc00::/7
+      - fe80::/10
+      - ff00::/8
+    # Appended to except: IPv6 CIDRs only.
+    extraExcept: []
+  # Extra egress rules (NetworkPolicyEgressRule objects) appended as is, e.g.
+  # an in-cluster proxy or LLM endpoint the worker must reach.
+  extraEgress: []
+
 autoscaling:
   enabled: false
   minReplicas: 1

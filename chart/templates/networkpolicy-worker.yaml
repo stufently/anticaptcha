@@ -1,0 +1,55 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy }}
+{{- range $cidr := concat $np.ipv4.except $np.ipv4.extraExcept }}
+{{- if contains ":" $cidr }}
+{{- fail (printf "networkPolicy.ipv4 except %q is not an IPv4 CIDR" $cidr) }}
+{{- end }}
+{{- end }}
+{{- if $np.ipv6.enabled }}
+{{- range $cidr := concat $np.ipv6.except $np.ipv6.extraExcept }}
+{{- if not (contains ":" $cidr) }}
+{{- fail (printf "networkPolicy.ipv6 except %q is not an IPv6 CIDR" $cidr) }}
+{{- end }}
+{{- end }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "anticaptcha.fullname" . }}-worker-egress
+  labels:
+    {{- include "anticaptcha.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "anticaptcha.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            {{- toYaml $np.dns.namespaceSelector | nindent 12 }}
+          podSelector:
+            {{- toYaml $np.dns.podSelector | nindent 12 }}
+      ports:
+        {{- toYaml $np.dns.ports | nindent 8 }}
+    - to:
+        - ipBlock:
+            cidr: {{ $np.ipv4.cidr }}
+            {{- with concat $np.ipv4.except $np.ipv4.extraExcept }}
+            except:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+        {{- if $np.ipv6.enabled }}
+        - ipBlock:
+            cidr: {{ $np.ipv6.cidr | quote }}
+            {{- with concat $np.ipv6.except $np.ipv6.extraExcept }}
+            except:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+        {{- end }}
+    {{- with $np.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
