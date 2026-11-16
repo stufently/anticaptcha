@@ -199,7 +199,7 @@ curl -X POST http://localhost:8000/api/v1/task \
 | `success` | всегда `true` (неудача — задача `failed`) |
 | `cookies` | cookies браузера воркера в формате Playwright (`name`, `value`, `domain`, `path`, `expires`, `httpOnly`, `secure`, `sameSite`) — только для хоста итоговой страницы, его поддоменов и cookies родительского домена (`Domain=example.com` для `www.example.com`), которые браузер отправил бы этой странице; host-only cookies родительского хоста и cookies других сайтов (сторонние фреймы, промежуточные редиректы) отброшены |
 | `url` | итоговый URL страницы после перетаскивания |
-| `user_agent` | `navigator.userAgent` браузера воркера. HTTP-заголовок `User-Agent` того же браузера может отличаться (stealth правит только значение в JS) |
+| `user_agent` | User-Agent браузера воркера: то же значение, что `navigator.userAgent` и HTTP-заголовок `User-Agent` страницы |
 
 В лог воркера cookies не пишутся — только их количество.
 

@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Fixed — 2026-11-16
+- Браузер: HTTP-заголовок `User-Agent` и client hints (`Sec-CH-UA`,
+  `Sec-CH-UA-Platform`, `Sec-CH-UA-Mobile`) больше не говорят `HeadlessChrome` и
+  совпадают с `navigator.userAgent`/`navigator.userAgentData` каждой страницы
+  `browser_manager.new_page()` (обе ветки — свой контекст с прокси и без), в
+  том числе в iframe, подресурсах и `fetch`. Раньше stealth правил только JS:
+  заголовок был `HeadlessChrome/158…`, `Sec-CH-UA` — `"HeadlessChrome";v="158"`.
+  UA и client hints читаются у самого запущенного Chromium (`Browser.getVersion`
+  и `getHighEntropyValues` на служебной странице, раз на запуск браузера), из них
+  заменяется только `HeadlessChrome` → `Chrome`/`Google Chrome`; страница
+  получает их через `user_agent` контекста и CDP `Emulation.setUserAgentOverride`
+  с `userAgentMetadata` (без брендов Chromium подставляет свои, с
+  `HeadlessChrome`). Окна, открытые страницей (`window.open`), получают только
+  `User-Agent` контекста. Изоляция контекстов не изменилась: у каждой страницы
+  свой контекст, он закрывается вместе с ней. Тест
+  `tests/test_browser_identity.py` сверяет заголовки локального echo-сервера с
+  `navigator.*` в настоящем Chromium.
+
 ## [1.3.4] — 2026-11-16
 
 ### Changed — 2026-11-16
@@ -11,9 +29,8 @@
   итоговой страницы, его поддоменов и cookies родительского домена
   (`Domain=example.com`), которые браузер отправил бы этой странице; host-only
   cookies родительского хоста и сторонние сайты отброшены; `url` — итоговый
-  `page.url`; `user_agent` — `navigator.userAgent`. HTTP-заголовок `User-Agent`
-  того же браузера при этом `HeadlessChrome/...`: stealth правит только значение
-  в JS (проверено в Chromium образа 1.3.3). В лог воркера идёт только число cookies.
+  `page.url`; `user_agent` — `navigator.userAgent`. В лог воркера идёт только
+  число cookies.
 
 ### Fixed — 2026-11-16
 - `slider`: успех проверяется по отсутствию ВИДИМОЙ ручки, и она должна

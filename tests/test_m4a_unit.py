@@ -13,7 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
 from app.models.task import Task
-from app.utils.browser import BrowserManager
+from app.utils.browser import BrowserIdentity, BrowserManager
 from workers import task_worker
 from workers.solvers import smartcaptcha
 from workers.solvers.proxy import parse_proxy
@@ -254,17 +254,21 @@ def test_Y7_proxy_context(monkeypatch):
         browser = SimpleNamespace(new_context=AsyncMock(return_value=context),
                                   new_page=AsyncMock(return_value=page))
         monkeypatch.setattr(manager, 'get_browser', AsyncMock(return_value=browser))
+        identity = BrowserIdentity(user_agent='UA', metadata={})
+        monkeypatch.setattr(manager, '_browser_identity', AsyncMock(return_value=identity))
+        monkeypatch.setattr(manager, '_apply_identity', AsyncMock())
         proxy = {'server': 'http://8.8.8.8:8080'}
         try:
             assert await manager.new_page(stealth=False, proxy=proxy) is page
-            browser.new_context.assert_awaited_once_with(proxy=proxy)
+            browser.new_context.assert_awaited_once_with(proxy=proxy, user_agent='UA')
+            manager._apply_identity.assert_awaited_once_with(page, identity)
             await manager.close_page(page)
             page.close.assert_awaited_once()
             context.close.assert_awaited_once()
             browser.new_context.reset_mock()
             context.close.reset_mock()
             await manager.new_page(stealth=False)
-            browser.new_page.assert_awaited_once()
+            browser.new_page.assert_awaited_once_with(user_agent='UA')
             browser.new_context.assert_not_awaited()
             await manager.close_page(page)
             context.close.assert_not_awaited()

@@ -16,7 +16,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
 from app.models.task import Task
-from app.utils.browser import BrowserManager
+from app.utils.browser import BrowserIdentity, BrowserManager
 from workers import task_worker
 from workers.solvers import smartcaptcha
 from workers.solvers.proxy import parse_proxy
@@ -212,6 +212,13 @@ def test_proxy_rejects_whitespace_and_control_chars():
             parse_proxy(value)
 
 
+def _stub_identity(monkeypatch, manager):
+    """The mocked browser has no CDP: skip reading and applying the identity."""
+    monkeypatch.setattr(manager, '_browser_identity', AsyncMock(
+        return_value=BrowserIdentity(user_agent='UA', metadata={})))
+    monkeypatch.setattr(manager, '_apply_identity', AsyncMock())
+
+
 # --------------------------------------------------------------------------
 # B04 / B05 - the proxy context must not outlive the page it was made for
 # --------------------------------------------------------------------------
@@ -224,6 +231,7 @@ def _manager_with_proxy_context(monkeypatch, page=None, page_error=None):
     browser = SimpleNamespace(new_context=AsyncMock(return_value=context),
                               new_page=AsyncMock(return_value=page))
     monkeypatch.setattr(manager, 'get_browser', AsyncMock(return_value=browser))
+    _stub_identity(monkeypatch, manager)
     return manager, context
 
 
@@ -285,6 +293,7 @@ def test_cancelled_context_creation_closes_when_ready(monkeypatch, fail_creation
 
         browser = SimpleNamespace(new_context=create_context)
         monkeypatch.setattr(manager, 'get_browser', AsyncMock(return_value=browser))
+        _stub_identity(monkeypatch, manager)
         pending = asyncio.create_task(manager.new_page(stealth=False, proxy=PROXY))
         try:
             await asyncio.wait_for(started.wait(), 1)

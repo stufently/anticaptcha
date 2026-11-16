@@ -157,11 +157,11 @@ def test_nc_slider_hidden_handle_with_track_left_is_success(monkeypatch):
     assert result['success'] is True
     assert info['drags'] == 1
     assert result['url'] == ORIGIN + '/done'
-    # navigator.userAgent of the page. NB: stealth patches only the JS value;
-    # the HTTP User-Agent header of the same page still says HeadlessChrome
-    # (stealth's header override needs hook_playwright_context, not used).
+    # navigator.userAgent of the page, the same value its HTTP requests send
     assert result['user_agent'] == info['page_user_agent']
+    assert result['user_agent'] == info['header_user_agent']
     assert result['user_agent'].startswith('Mozilla/5.0')
+    assert 'Headless' not in result['user_agent']
     by_name = {c['name']: c for c in result['cookies']}
     # host, script, parent domain and subdomain cookies; other sites dropped
     assert set(by_name) == {'sid', 'nc_pass', 'parent', 'sub'}
