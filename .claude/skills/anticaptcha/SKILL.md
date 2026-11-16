@@ -1,6 +1,6 @@
 ---
 name: anticaptcha
-description: CAPTCHA solving API service. Use this skill when you need to solve CAPTCHAs programmatically via HTTP API. Supports reCAPTCHA v2/v3, hCaptcha, Turnstile, VK, GeeTest, FunCaptcha, Amazon WAF, Tencent.
+description: CAPTCHA solving API service. Use this skill when you need to solve CAPTCHAs programmatically via HTTP API. Supports reCAPTCHA v2/v3, hCaptcha, Turnstile, Yandex SmartCaptcha, slider and image-to-text CAPTCHA.
 ---
 
 # AntiCAPTCHA API Service
@@ -132,13 +132,12 @@ curl $BASE_URL/api/v1/task/abc123 \
 | `recaptcha_v3` | Google reCAPTCHA v3 (score-based) | Невидимая проверка |
 | `hcaptcha` | hCaptcha | Privacy-focused сайты |
 | `turnstile` | Cloudflare Turnstile | Cloudflare защита |
-| `vk_captcha` | VK CAPTCHA (text/image) | VKontakte |
-| `vk_challenge` | VK Challenge (behavior) | VK защита от ботов |
-| `geetest` | GeeTest (slide/icon) | Китайские сайты |
-| `funcaptcha` | FunCaptcha/Arkose Labs | Игровые сайты |
-| `amazon_waf` | Amazon WAF CAPTCHA | AWS сайты |
-| `tencent` | Tencent CAPTCHA | Китайские сервисы |
-| `simple_captcha` | Text/Math CAPTCHA | Простые сайты |
+| `yandex_smartcaptcha` | Yandex SmartCaptcha | Яндекс; с датацентрового IP нужен `proxy` |
+| `slider` | Слайдер-CAPTCHA (AliExpress и др.) | Нужен только `page_url`; токена нет |
+| `image_text` | Текст на картинке (OCR) | Классические текстовые CAPTCHA |
+
+Других типов API не принимает (`POST /task` → 422); актуальный список и поля —
+таблица «Типы задач» в README.md.
 
 ## Примеры для Claude/Codex
 
