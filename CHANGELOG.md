@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+### Added — 2026-11-15
+- Тип задачи `slider`: перетаскивание ползунка слайдер-CAPTCHA с «человеческой»
+  траекторией, до 3 попыток (`workers/solvers/slider.py`).
+
+### Fixed — 2026-11-16
+- `slider`: `page_url` проходит общий SSRF-guard (`validate_page_url`) до открытия
+  страницы — раньше воркер ходил по любому адресу клиента, включая loopback и
+  приватные сети. Ошибки солвера теперь бросаются, и задача становится `failed`;
+  раньше `{"success": false}` возвращался как результат и задача числилась
+  `solved`. `handle_selector`/`track_selector` проверяются (строка или список
+  строк), локатор берёт первый совпавший элемент (`.first`) — общий селектор
+  `[role="slider"]` с несколькими совпадениями падал в strict mode.
+- Воркер: результат солвера вида `{"success": false, ...}` переводит задачу в
+  `failed` с текстом `error`, а не в `solved`, и не попадает в статистику.
+- Из `TaskType` и реестра воркера убраны 21 тип, которые не могли решиться ни
+  разу: 13 солверов из коммитов 0470c22/c331188 (`lemin`, `capy_puzzle`,
+  `datadome`, `mtcaptcha`, `audio_captcha`, `math_captcha`, `logic_captcha`,
+  `binance`, `temu`, `altcha`, `prosopo`, `cybersiara`, `custom_enterprise`)
+  вызывали `async with browser_manager.get_browser()` (метод возвращает
+  coroutine) и несуществующий `VisionLLMClassifier.classify_image`, без
+  SSRF-guard; их файлы удалены. 8 библиотечных солверов (`amazon_waf`,
+  `cloudflare`, `funcaptcha`, `geetest`, `simple_captcha`, `tencent`,
+  `vk_captcha`, `vk_challenge`) имеют интерфейс `solve(page, element)` для
+  `UnifiedCaptchaSolver` и под вызов воркера `solve(input_data)` не подходят —
+  файлы остались, из реестра воркера сняты. `POST /task` с этими типами теперь
+  отвечает 422. Тест сверяет `TaskType` с реестром и сигнатуру `solve`.
+- Чарт: воркер получает `ANTICAPTCHA_ADMIN_TOKEN=""` явной записью `env`, которая
+  перекрывает одноимённый ключ общего Secret, подключённого через `envFrom`.
+
+### Removed — 2026-11-16
+- Отчёты разработки и одноразовые скрипты из 7511900 (18 `*.md`, 44 скрипта в
+  корне: патчеры `recaptcha.py` с захардкоженными локальными путями, пайплайны
+  обучения, ручные пробы), раздел README про обучение custom-модели, который
+  ссылался на них.
+
 ## [1.3.1] — 2026-11-13
 
 CLI удаления пользователя и отзыва ключей (`list-keys`, `revoke-key`,
