@@ -185,3 +185,37 @@ def test_no_bare_except_in_solvers():
         for m in pattern.finditer(s)
     ]
     assert offenders == []
+
+
+class FailureMarkerSolver:
+    async def setup(self):
+        pass
+
+    async def solve(self, input_data):
+        return {"success": False, "error": "widget not found"}
+
+
+def test_failure_marker_result_fails_task(monkeypatch, db):
+    """A solver returning {'success': False} must not produce a solved task."""
+    monkeypatch.setattr(task_worker, "SOLVERS", {"marker": FailureMarkerSolver})
+    w = task_worker.TaskWorker()
+    asyncio.run(w.setup_solvers())
+    task = _task(db, "marker")
+    asyncio.run(w.process_task(db, task))
+    db.refresh(task)
+    assert task.status == "failed"
+    assert task.result is None
+    assert task.error_message == "widget not found"
+    assert db.query(task_worker.Stats).count() == 0
+
+
+def test_task_types_match_solver_registry():
+    """Every API task type has a worker solver and vice versa, and every
+    registered solver takes the worker's call: solve(input_data)."""
+    import inspect
+    from app.schemas.task import TaskType
+
+    assert {t.value for t in TaskType} == set(task_worker.SOLVERS)
+    for name, cls in task_worker.SOLVERS.items():
+        params = list(inspect.signature(cls.solve).parameters)
+        assert params == ["self", "input_data"], f"{name}: solve{tuple(params)}"

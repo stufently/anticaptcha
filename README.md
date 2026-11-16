@@ -167,27 +167,6 @@ curl -X POST http://localhost:8000/api/v1/task \
 | `recaptcha_v2` | reCAPTCHA v2 (плитки) | чекбокс работает (проверено тестовым ключом Google); картиночный челлендж решается **только с включённым vision LLM**, а на реальных сайтах с датацентрового IP успех не гарантирован |
 | `yandex_smartcaptcha` | Yandex SmartCaptcha | чекбокс, слайдер и невидимый режим возвращают токен; текстовое задание решается через vision LLM (нужен ключ; до 3 раундов на задачу, дедлайн опроса 75 с), точность зависит от сложности ключа SmartCaptcha; с датацентрового IP Яндекс не принимает даже верные ответы — нужен резидентный `proxy`; силуэты не решаются |
 | `slider` | Slider CAPTCHA | универсальный солвер для слайдер CAPTCHA (AliExpress, Alibaba и др.); имитирует человеческое движение с кривой, ускорением и джиттером; до 3 попыток на задачу |
-| `amazon_waf` | Amazon WAF CAPTCHA | солвер для Amazon WAF CAPTCHA |
-| `cloudflare` | Cloudflare CAPTCHA | альтернативный солвер для Cloudflare |
-| `funcaptcha` | FunCaptcha (Arkose Labs) | солвер для FunCaptcha |
-| `geetest` | GeeTest CAPTCHA | солвер для GeeTest (слайдер, клик) |
-| `simple_captcha` | Simple CAPTCHA | базовый солвер для простых текстовых CAPTCHA |
-| `tencent` | Tencent CAPTCHA | солвер для Tencent CAPTCHA |
-| `vk_captcha` | VK CAPTCHA | солвер для VK CAPTCHA (текст, изображения) |
-| `vk_challenge` | VK Challenge | солвер для VK Challenge (поведенческая проверка) |
-| `lemin` | Lemin CAPTCHA | солвер для Lemin CAPTCHA (слайдер + клик) |
-| `capy_puzzle` | Capy Puzzle | солвер для Capy Puzzle (пазлы) |
-| `datadome` | DataDome CAPTCHA | солвер для DataDome (поведенческая защита) |
-| `mtcaptcha` | MTCaptcha | солвер для MTCaptcha (чекбокс + изображения) |
-| `audio_captcha` | Audio CAPTCHA | солвер для аудио CAPTCHA (распознавание речи) |
-| `math_captcha` | Math CAPTCHA | солвер для математических CAPTCHA |
-| `logic_captcha` | Logic CAPTCHA | солвер для логических CAPTCHA (паттерны, последовательности) |
-| `binance` | Binance CAPTCHA | солвер для Binance CAPTCHA (криптобиржи) |
-| `temu` | Temu CAPTCHA | солвер для Temu CAPTCHA (marketplace) |
-| `altcha` | Altcha CAPTCHA | солвер для Altcha (privacy-focused, proof-of-work) |
-| `prosopo` | Prosopo CAPTCHA | солвер для Prosopo (децентрализованная) |
-| `cybersiara` | CyberSiARA CAPTCHA | солвер для CyberSiARA (advanced anti-bot) |
-| `custom_enterprise` | Custom Enterprise | настраиваемый солвер для кастомных решений |
 
 Поля `input_data` для браузерных типов:
 

@@ -20,27 +20,6 @@ from workers.solvers.image_text import ImageTextSolver
 from workers.solvers.turnstile import TurnstileSolver
 from workers.solvers.smartcaptcha import SmartCaptchaSolver
 from workers.solvers.slider import SliderCaptchaSolver
-from workers.solvers.amazon import AmazonWAFSolver
-from workers.solvers.cloudflare import CloudflareTurnstileSolver
-from workers.solvers.funcaptcha import FunCaptchaSolver
-from workers.solvers.geetest import GeeTestSolver
-from workers.solvers.simple_captcha import SimpleCaptchaSolver
-from workers.solvers.tencent import TencentCaptchaSolver
-from workers.solvers.vk import VKCaptchaSolver
-from workers.solvers.vk_challenge import VKChallengeSolver
-from workers.solvers.lemin import LeminSolver
-from workers.solvers.capy import CapyPuzzleSolver
-from workers.solvers.datadome import DataDomeSolver
-from workers.solvers.mtcaptcha import MTCaptchaSolver
-from workers.solvers.audio_captcha import AudioCaptchaSolver
-from workers.solvers.math_captcha import MathCaptchaSolver
-from workers.solvers.logic_captcha import LogicCaptchaSolver
-from workers.solvers.binance import BinanceCaptchaSolver
-from workers.solvers.temu import TemuCaptchaSolver
-from workers.solvers.altcha import AltchaSolver
-from workers.solvers.prosopo import ProsopoSolver
-from workers.solvers.cybersiara import CyberSiaraSolver
-from workers.solvers.custom_enterprise import CustomEnterpriseSolver
 
 
 # Solver registry
@@ -52,27 +31,6 @@ SOLVERS = {
     "turnstile": TurnstileSolver,
     "yandex_smartcaptcha": SmartCaptchaSolver,
     "slider": SliderCaptchaSolver,
-    "amazon_waf": AmazonWAFSolver,
-    "cloudflare": CloudflareTurnstileSolver,
-    "funcaptcha": FunCaptchaSolver,
-    "geetest": GeeTestSolver,
-    "simple_captcha": SimpleCaptchaSolver,
-    "tencent": TencentCaptchaSolver,
-    "vk_captcha": VKCaptchaSolver,
-    "vk_challenge": VKChallengeSolver,
-    "lemin": LeminSolver,
-    "capy_puzzle": CapyPuzzleSolver,
-    "datadome": DataDomeSolver,
-    "mtcaptcha": MTCaptchaSolver,
-    "audio_captcha": AudioCaptchaSolver,
-    "math_captcha": MathCaptchaSolver,
-    "logic_captcha": LogicCaptchaSolver,
-    "binance": BinanceCaptchaSolver,
-    "temu": TemuCaptchaSolver,
-    "altcha": AltchaSolver,
-    "prosopo": ProsopoSolver,
-    "cybersiara": CyberSiaraSolver,
-    "custom_enterprise": CustomEnterpriseSolver,
 }
 
 
@@ -179,7 +137,12 @@ class TaskWorker:
                 raise TimeoutError(
                     f"Task timed out after {settings.task_timeout}s"
                 ) from None
-            
+
+            # Solvers report failure by raising; a returned failure marker must
+            # not reach the client as a solved task (nor count as a success).
+            if isinstance(result, dict) and result.get("success") is False:
+                raise RuntimeError(result.get("error") or "solver reported failure")
+
             # Update task
             task.status = "solved"
             task.result = json.dumps(result)
