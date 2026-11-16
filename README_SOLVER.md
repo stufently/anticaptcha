@@ -18,7 +18,7 @@ Vision LLM-based CAPTCHA solver supporting **6 popular CAPTCHA types**:
 docker build -t anticaptcha:latest .
 
 # Run component test
-docker run --rm -v "$(pwd):/app" anticaptcha:latest python3 test_solvers_logic.py
+docker run --rm --network none -v "$(pwd)/tests:/app/tests:ro" anticaptcha:latest python -m pytest tests -q -p no:cacheprovider
 ```
 
 Expected output:
@@ -117,7 +117,7 @@ playwright install chromium
 docker build -t anticaptcha:latest .
 
 # Run tests
-docker run --rm anticaptcha:latest python3 test_solvers_logic.py
+docker run --rm --network none -v "$(pwd)/tests:/app/tests:ro" anticaptcha:latest python -m pytest tests -q -p no:cacheprovider
 
 # Run your script
 docker run --rm -v "$(pwd):/app" anticaptcha:latest python3 your_script.py
