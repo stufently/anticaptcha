@@ -1,7 +1,7 @@
 """Tests for slider CAPTCHA solver."""
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from workers.solvers.slider import SliderCaptchaSolver
+from workers.solvers.slider import GOTO_TIMEOUT_MS, SliderCaptchaSolver
 
 
 @pytest.fixture
@@ -62,21 +62,15 @@ class TestSliderCaptchaSolver:
     @pytest.mark.asyncio
     async def test_solve_success(self, solver, mock_page, mock_browser_manager):
         """Test successful slider solve."""
-        # Mock detection to return False after drag (slider gone)
-        detect_calls = [True, False]  # First call: present, second: gone
-        
-        async def mock_detect(page, selectors=None):
-            return detect_calls.pop(0) if detect_calls else False
-        
-        solver.detect = mock_detect
-        
-        # Mock _drag_slider to succeed
+        # detect() runs only after a drag: slider gone after the first one
+        solver.detect = AsyncMock(return_value=False)
         solver._drag_slider = AsyncMock()
         
         result = await solver.solve({'page_url': 'https://example.com'})
         
-        assert result['success'] is True
-        assert 'error' not in result
+        assert result == {'success': True}
+        assert solver._drag_slider.call_count == 1
+        mock_page.close.assert_awaited_once()
     
     @pytest.mark.asyncio
     async def test_solve_failure_after_retries(self, solver, mock_page, mock_browser_manager):
@@ -208,14 +202,29 @@ class TestSliderCaptchaSolver:
             mock_bm.new_page.assert_not_called()
     
     @pytest.mark.asyncio
+    @pytest.mark.parametrize('field', ['handle_selector', 'track_selector'])
     @pytest.mark.parametrize('bad', [123, [], [''], ['#ok', 5], {'a': 1}])
-    async def test_invalid_selector_override_rejected(self, solver, bad):
-        """Selector overrides must be a non-empty string or list of strings."""
-        with patch('workers.solvers.slider.browser_manager') as mock_bm:
-            mock_bm.new_page = AsyncMock()
-            with pytest.raises(ValueError, match='handle_selector'):
-                await solver.solve({'page_url': 'https://example.com', 'handle_selector': bad})
-            mock_bm.new_page.assert_not_called()
+    async def test_invalid_selector_override_rejected(self, solver, mock_browser_manager, field, bad):
+        """Selector overrides must be a non-empty string or list of strings,
+        rejected before any browser page opens, naming the offending field."""
+        with pytest.raises(ValueError, match=f'^{field} must be a non-empty string or list of strings$'):
+            await solver.solve({'page_url': 'https://example.com', field: bad})
+        mock_browser_manager.new_page.assert_not_called()
+    
+    @pytest.mark.asyncio
+    async def test_goto_uses_guarded_url_and_timeout(self, solver, mock_page):
+        """The browser opens the URL the guard RETURNS (normalized), bounded by
+        the navigation timeout."""
+        solver.detect = AsyncMock(return_value=False)
+        solver._drag_slider = AsyncMock()
+        with patch('workers.solvers.slider.browser_manager') as mock_bm, \
+                patch('workers.solvers.slider.validate_page_url',
+                      return_value='https://normalized.example/') as guard:
+            mock_bm.new_page = AsyncMock(return_value=mock_page)
+            await solver.solve({'page_url': 'HTTPS://Normalized.Example'})
+        guard.assert_called_once_with('HTTPS://Normalized.Example')
+        mock_page.goto.assert_awaited_once_with(
+            'https://normalized.example/', timeout=GOTO_TIMEOUT_MS, wait_until='domcontentloaded')
 
 
     @pytest.mark.asyncio
