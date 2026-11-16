@@ -55,12 +55,22 @@ kubectl apply -f argocd-application.yaml
 
 | Параметр | Описание | По умолчанию |
 |----------|----------|--------------|
-| `replicaCount` | Количество реплик | `1` |
-| `image.repository` | Docker образ | `anticaptcha` |
-| `image.tag` | Тег образа | `latest` |
+| `replicaCount` | Реплики API (база SQLite на RWO-томе — больше одной не ставить) | `1` |
+| `image.repository` | Docker образ | `ghcr.io/stufently/anticaptcha` |
+| `image.tag` | Тег образа; пусто — `appVersion` чарта | `""` |
 | `service.port` | Порт сервиса | `8000` |
-| `resources.limits.cpu` | Лимит CPU | `2000m` |
-| `resources.limits.memory` | Лимит памяти | `4Gi` |
+| `resources.limits.cpu` | Лимит CPU API | `1000m` |
+| `resources.limits.memory` | Лимит памяти API | `1Gi` |
+| `worker.resources.limits.cpu` | Лимит CPU воркера | `2000m` |
+| `worker.resources.limits.memory` | Лимит памяти воркера | `4Gi` |
+| `persistence.size` | Том с базой SQLite (общий для API и воркера) | `10Gi` |
+| `existingSecret` | Secret, подключаемый в API через `envFrom` | `""` |
+
+`autoscaling.*`, `configMap.*` и `secrets.*` в `values.yaml` есть, но шаблонов
+HPA, ConfigMap и Secret в чарте нет: `autoscaling.enabled: true` только убирает
+`replicas` у API, `configMap.enabled: true` подключает ConfigMap
+`<fullname>-config` (fullname — имя релиза, если в нём есть `anticaptcha`, иначе
+`<release>-anticaptcha`), который нужно создать самому.
 
 ### Worker
 
@@ -213,26 +223,35 @@ ingress:
 
 ### Environment Variables
 
+Список `env` (общий для API и воркера) заменяется целиком. Настройки —
+`app/config.py`, переменные с префиксом `ANTICAPTCHA_`; база — только SQLite по
+пути `ANTICAPTCHA_DATABASE_PATH`. По умолчанию:
+
 ```yaml
 env:
-  - name: DATABASE_URL
-    value: "sqlite+aiosqlite:///./data/anticaptcha.db"
-  - name: LOG_LEVEL
-    value: "INFO"
-  - name: WORKERS_COUNT
-    value: "4"
+  - name: ANTICAPTCHA_DATABASE_PATH
+    value: "/app/data/anticaptcha.db"
+  - name: ANTICAPTCHA_MODELS_DIR
+    value: "/app/models"
+  - name: ANTICAPTCHA_ADMIN_TOKEN        # воркеру перекрывается пустым значением
+    valueFrom:
+      secretKeyRef: {name: anticaptcha-secrets, key: admin-token, optional: true}
+  - name: BAILIAN_CODING_PLAN_API_KEY    # ключ vision LLM
+    valueFrom:
+      secretKeyRef: {name: anticaptcha-secrets, key: bailian-api-key, optional: true}
 ```
+
+(`ANTICAPTCHA_LOG_LEVEL` и `ANTICAPTCHA_WORKERS_COUNT` из `values.yaml` код
+сейчас не читает.)
 
 ## Production Deployment
 
 ### values-prod.yaml
 
 ```yaml
-replicaCount: 3
-
 image:
-  repository: your-registry.com/anticaptcha
-  tag: "1.0.0"
+  repository: ghcr.io/stufently/anticaptcha
+  tag: "X.Y.Z"   # или пусто — appVersion чарта
 
 resources:
   limits:
@@ -263,11 +282,8 @@ ingress:
       hosts:
         - anticaptcha.your-domain.com
 
-autoscaling:
+networkPolicy:
   enabled: true
-  minReplicas: 3
-  maxReplicas: 10
-  targetCPUUtilizationPercentage: 70
 ```
 
 ### Установка production версии
@@ -305,7 +321,8 @@ kubectl get ingress -n anticaptcha
 ### Логи
 
 ```bash
-kubectl logs -f deployment/anticaptcha -n anticaptcha
+kubectl logs -f deployment/anticaptcha-api -n anticaptcha
+kubectl logs -f deployment/anticaptcha-worker -n anticaptcha
 ```
 
 ### Метрики

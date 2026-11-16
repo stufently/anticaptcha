@@ -328,23 +328,18 @@ cp .env.example .env
 
 ## ML Модели
 
-### Yolo для reCAPTCHA/hCaptcha
+### Yolo для reCAPTCHA
 
-Для решения image challenge нужен Yolo:
-
-```python
-from ultralytics import YOLO
-
-# Скачать предобученную модель
-model = YOLO('yolov8n-cls.pt')
-
-# Сохранить в models/
-model.save('models/yolov8n-cls.pt')
-```
+Образ содержит `/app/models/yolov8s.pt` и `/app/models/yolov8n.pt` (скачаны при
+сборке, сверены по SHA-256). Солвер берёт первый найденный в
+`ANTICAPTCHA_MODELS_DIR` по приоритету `recaptcha_custom.pt` > `yolov8s.pt` >
+`yolov8n.pt` (`workers/classifiers/yolo.py`) и ничего не скачивает в рантайме.
+Своя модель — `docs/TRAINING_GUIDE.md`.
 
 ### EasyOCR для text CAPTCHA
 
-Устанавливается автоматически через `requirements.txt`. При первом запуске скачает модели.
+Модели EasyOCR скачиваются при сборке образа в `/app/easyocr_models`; в рантайме
+загрузка выключена.
 
 ## Ограничения
 

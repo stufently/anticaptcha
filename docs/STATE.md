@@ -1,6 +1,6 @@
 # Project State
 
-**Last updated:** 2026-11-05
+**Last updated:** 2026-11-16
 
 ## Current Status: ✅ Ready for Use
 
@@ -23,8 +23,12 @@
 - ✅ Task retrieval: `GET /api/v1/task/{id}`
 - ✅ Statistics: `GET /api/v1/stats`
 
+### Task types
+`recaptcha_v2`, `recaptcha_v3`, `hcaptcha`, `image_text`, `turnstile`,
+`yandex_smartcaptcha`, `slider` (`TaskType` in `app/schemas/task.py`, details and
+limits per type — README, «Типы задач»).
+
 ### Pending (Optional)
-- ⚠️ Download Yolo models for image classification
 - ⚠️ Test OCR with real CAPTCHA samples
 - ⚠️ Create web dashboard
 
@@ -62,20 +66,23 @@
 - task_worker.py - Background processor
 - solvers/ - CAPTCHA solvers
 
-### ML Models (models/)
-- yolov8n-cls.pt - Image classification (needs download)
-- OCR models - Auto-downloaded by EasyOCR
+### ML Models (baked into the image)
+- `/app/models/yolov8s.pt`, `/app/models/yolov8n.pt` — downloaded at build time,
+  SHA-256 verified; an optional `recaptcha_custom.pt` in `ANTICAPTCHA_MODELS_DIR`
+  takes priority (`workers/classifiers/yolo.py`). Nothing is downloaded at runtime.
+- EasyOCR models — `/app/easyocr_models`, downloaded at build time.
+- Vision LLM (reCAPTCHA v2 tiles, SmartCaptcha text task) — external, needs
+  `BAILIAN_CODING_PLAN_API_KEY`.
 
 ## Configuration
 
-See .env.example for all settings.
+All settings: `app/config.py` (environment variables with the `ANTICAPTCHA_`
+prefix); `.env.example` lists a few of them.
 
 ## Deployment
 
-```bash
-docker build -t anticaptcha .
-docker run -d -p 8000:8000 anticaptcha
-```
+API and worker are two processes from one image sharing the SQLite file:
+README («Быстрый старт»), `DOCKER_COMPOSE.md`, Helm chart in `chart/`.
 
 ## Known Issues
 

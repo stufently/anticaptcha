@@ -12,11 +12,15 @@
 - hCaptcha
 - Image-to-text (OCR)
 - Cloudflare Turnstile
+- Yandex SmartCaptcha
+- Slider CAPTCHA (перетаскивание ползунка)
+
+Подробности и ограничения по каждому типу — README в корне, «Типы задач».
 
 ## Технологии
 
 - FastAPI + Python
-- SQLite
+- SQLite (единственная поддерживаемая БД)
 - Playwright (headless browser)
 - Yolo (Ultralytics) — классификация изображений
 - EasyOCR — распознавание текста
@@ -29,14 +33,9 @@
 
 ## Быстрый старт
 
-```bash
-# Через Docker
-docker build -t anticaptcha .
-docker run -d -p 8000:8000 anticaptcha
-
-# API: http://localhost:8000
-# Docs: http://localhost:8000/docs
-```
+API и воркер — два процесса из одного образа с общей базой SQLite: запуск —
+README в корне («Быстрый старт») или `DOCKER_COMPOSE.md`, Kubernetes — `chart/`.
+После запуска API: http://localhost:8000, Swagger: http://localhost:8000/docs.
 
 ## Статус
 
@@ -45,7 +44,7 @@ docker run -d -p 8000:8000 anticaptcha
 - ✅ REST API endpoints
 - ✅ Background worker
 - ✅ Solvers для всех типов CAPTCHA
-- ⚠️ ML модели нужно загрузить/обучить
+- ✅ Модели YOLO и EasyOCR в образе; своя модель reCAPTCHA — `docs/TRAINING_GUIDE.md`
 
 ## Контакты
 

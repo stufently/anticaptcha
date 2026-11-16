@@ -9,6 +9,18 @@
   `nginx.conf`, теперь `anticaptcha-api`). Воркер больше не получает
   `ANTICAPTCHA_ADMIN_TOKEN` (как в чарте с 1.3.2). Подсказка про Vision LLM
   называла `QWEN_API_KEY` — ключ читается из `BAILIAN_CODING_PLAN_API_KEY`.
+- Документация сверена с кодом: `DOCKER_COMPOSE.md` описывал PostgreSQL через
+  `DATABASE_URL`, Redis, сервис `anticaptcha`, `--scale` и
+  `docker-compose.prod.yml` с переменными, которых код не читает; теперь —
+  реальные сервисы `anticaptcha-api`/`anticaptcha-worker`, SQLite на томе,
+  `ANTICAPTCHA_*`, бэкап тома при остановленных контейнерах. `AGENTS.md`
+  («проект в стадии разработки, ML модели не загружены») переписан под текущее
+  устройство, тесты и релиз. `chart/README.md`: дефолты образа и ресурсов,
+  пример `env` (был `DATABASE_URL`/`WORKERS_COUNT`), production-пример без
+  `replicaCount: 3` и `autoscaling` (шаблона HPA в чарте нет, база — SQLite на
+  RWO-томе). README и
+  `docs/`: модели YOLO/EasyOCR в образе (не `yolov8n-cls.pt` вручную), полный
+  список типов задач.
 
 ### Removed — 2026-11-16
 - Из `docker-compose.yml` убраны сервисы `postgres` и `redis` (профили
