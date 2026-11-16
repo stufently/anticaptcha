@@ -22,10 +22,14 @@ It rejects:
 - hostnames for which ANY resolved address falls into those ranges, and
   hostnames that do not resolve at all.
 
-Limitation: the name is resolved here and again by the browser, so DNS
+Limitations: this checks only the URL the solver is given. It does not see
+what the page does after it loads in render_mode "page" (every URL solver's
+default, and the only mode of the slider): an HTTP redirect, a script
+navigation, fetch/XHR, frames, forms or WebSockets can still reach private
+addresses. And the name is resolved here and again by the browser, so DNS
 rebinding (a name that answers with a public address now and a private one a
-moment later) is not closed by this check. Egress from the worker must also
-be restricted at the network level (e.g. a Kubernetes NetworkPolicy).
+moment later) is not closed either. Egress from the worker must therefore be
+restricted at the network level (e.g. a Kubernetes NetworkPolicy).
 """
 import ipaddress
 import re
